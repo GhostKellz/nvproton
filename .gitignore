@@ -5,3 +5,8 @@ zig-out/
 CLAUDE.md
 TODO.md
 DEVELOPMENT_ROADMAP.md
+
+
+# Added by cargo
+
+/target
