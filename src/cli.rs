@@ -21,6 +21,8 @@ pub enum Commands {
     Prepare(PrepareArgs),
     /// Manage detected games
     Games(GamesArgs),
+    /// Steam integration (launch options, Proton, shortcuts)
+    Steam(SteamArgs),
     /// Detect games from various sources
     Detect(DetectArgs),
     /// Manage game profiles
@@ -275,4 +277,121 @@ fn parse_kv_pair(s: &str) -> Result<(String, String), String> {
         return Err("key cannot be empty".into());
     }
     Ok((key.to_string(), value.to_string()))
+}
+
+// ============================================================================
+// Steam Integration Commands
+// ============================================================================
+
+#[derive(Debug, Args)]
+pub struct SteamArgs {
+    #[command(subcommand)]
+    pub command: SteamCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SteamCommand {
+    /// Generate optimized launch options for a game
+    LaunchOptions(LaunchOptionsArgs),
+    /// Manage Proton versions
+    Proton(ProtonArgs),
+    /// Manage non-Steam shortcuts
+    Shortcut(ShortcutArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct LaunchOptionsArgs {
+    /// Steam AppID
+    pub game_id: String,
+
+    /// Use nvproton as launch wrapper
+    #[arg(long, default_value = "true")]
+    pub use_nvproton: bool,
+
+    /// Enable Reflex low-latency mode
+    #[arg(long)]
+    pub reflex: bool,
+
+    /// Enable VRR (G-Sync/FreeSync)
+    #[arg(long)]
+    pub vrr: bool,
+
+    /// Target frame rate (0 = unlimited)
+    #[arg(long, default_value = "0")]
+    pub fps: u32,
+
+    /// Use dedicated shader cache path
+    #[arg(long)]
+    pub shader_cache: bool,
+
+    /// Enable MangoHud overlay
+    #[arg(long)]
+    pub mangohud: bool,
+
+    /// Enable Feral Gamemode
+    #[arg(long)]
+    pub gamemode: bool,
+
+    /// Additional environment variables (KEY=VALUE)
+    #[arg(long = "env", value_parser = parse_kv_pair)]
+    pub env: Vec<(String, String)>,
+
+    /// Output in copy-paste format for Steam
+    #[arg(long)]
+    pub copy_format: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct ProtonArgs {
+    #[command(subcommand)]
+    pub command: ProtonCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ProtonCommand {
+    /// List installed Proton versions
+    List,
+    /// Show recommended Proton versions for NVIDIA
+    Recommended,
+    /// Set default Proton version (shows instructions)
+    SetDefault {
+        /// Proton version name
+        version: String,
+    },
+}
+
+#[derive(Debug, Args)]
+pub struct ShortcutArgs {
+    #[command(subcommand)]
+    pub command: ShortcutCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ShortcutCommand {
+    /// Create a non-Steam shortcut
+    Create {
+        /// Shortcut name
+        name: String,
+        /// Executable path
+        exe: String,
+        /// Start directory
+        #[arg(long)]
+        start_dir: Option<String>,
+        /// Icon path
+        #[arg(long)]
+        icon: Option<String>,
+        /// Launch options
+        #[arg(long)]
+        launch_options: Option<String>,
+    },
+    /// List existing non-Steam shortcuts
+    List,
+    /// Generate optimized settings for a shortcut
+    Optimize {
+        /// Steam AppID or shortcut ID
+        appid: String,
+        /// Profile to apply
+        #[arg(long)]
+        profile: Option<String>,
+    },
 }

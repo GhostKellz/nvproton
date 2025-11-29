@@ -5,6 +5,7 @@ mod ffi;
 mod games;
 mod profile;
 mod runner;
+mod steam;
 
 use anyhow::Result;
 use clap::Parser;
@@ -25,6 +26,9 @@ fn main() -> Result<()> {
         }
         cli::Commands::Games(args) => {
             games::handle_games(args, &config_manager, &mut config)?;
+        }
+        cli::Commands::Steam(args) => {
+            steam::handle_steam(args, &config_manager, &mut config)?;
         }
         cli::Commands::Detect(args) => {
             detection::handle_detect(args, &config_manager, &mut config)?;
