@@ -1,8 +1,8 @@
 mod database;
 pub mod fingerprint;
-mod heroic;
-mod lutris;
-mod steam;
+pub mod heroic;
+pub mod lutris;
+pub mod steam;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};

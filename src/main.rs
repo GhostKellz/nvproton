@@ -2,7 +2,9 @@ mod cli;
 mod config;
 mod detection;
 mod ffi;
+mod games;
 mod profile;
+mod runner;
 
 use anyhow::Result;
 use clap::Parser;
@@ -15,6 +17,15 @@ fn main() -> Result<()> {
     let mut config = config_manager.load()?;
 
     match cli.command {
+        cli::Commands::Run(args) => {
+            runner::handle_run(args, &config_manager, &mut config)?;
+        }
+        cli::Commands::Prepare(args) => {
+            runner::handle_prepare(args, &config_manager, &mut config)?;
+        }
+        cli::Commands::Games(args) => {
+            games::handle_games(args, &config_manager, &mut config)?;
+        }
         cli::Commands::Detect(args) => {
             detection::handle_detect(args, &config_manager, &mut config)?;
         }

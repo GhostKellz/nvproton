@@ -4,8 +4,9 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 #[command(
     author,
     version,
-    about = "nvproton command-line interface",
-    propagate_version = true
+    about = "nvproton - NVIDIA-optimized Proton game launcher",
+    propagate_version = true,
+    after_help = "Examples:\n  nvproton run 1245620              # Run Elden Ring by Steam AppID\n  nvproton run --name \"Elden Ring\"  # Run by game name\n  nvproton prepare 1245620          # Pre-warm shaders before launch\n  nvproton games list               # List detected games"
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -14,9 +15,147 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Commands {
+    /// Run a game with NVIDIA optimizations
+    Run(RunArgs),
+    /// Prepare a game (shader pre-warming, profile setup)
+    Prepare(PrepareArgs),
+    /// Manage detected games
+    Games(GamesArgs),
+    /// Detect games from various sources
     Detect(DetectArgs),
+    /// Manage game profiles
     Profile(ProfileArgs),
+    /// Manage nvproton configuration
     Config(ConfigArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct RunArgs {
+    /// Steam AppID or game identifier
+    #[arg(value_name = "GAME_ID")]
+    pub game_id: Option<String>,
+
+    /// Run game by name (fuzzy match)
+    #[arg(long)]
+    pub name: Option<String>,
+
+    /// Profile to apply
+    #[arg(short, long)]
+    pub profile: Option<String>,
+
+    /// Enable Reflex low-latency mode
+    #[arg(long)]
+    pub reflex: bool,
+
+    /// Target frame rate (0 = unlimited)
+    #[arg(long, default_value = "0")]
+    pub fps: u32,
+
+    /// Enable VRR (G-Sync/FreeSync)
+    #[arg(long)]
+    pub vrr: bool,
+
+    /// Skip shader pre-warming
+    #[arg(long)]
+    pub no_prewarm: bool,
+
+    /// Dry run - show what would be done without launching
+    #[arg(long)]
+    pub dry_run: bool,
+
+    /// Additional arguments to pass to the game
+    #[arg(last = true)]
+    pub game_args: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct PrepareArgs {
+    /// Steam AppID or game identifier
+    #[arg(value_name = "GAME_ID")]
+    pub game_id: Option<String>,
+
+    /// Prepare game by name (fuzzy match)
+    #[arg(long)]
+    pub name: Option<String>,
+
+    /// Profile to apply
+    #[arg(short, long)]
+    pub profile: Option<String>,
+
+    /// Force shader recompilation
+    #[arg(long)]
+    pub force: bool,
+
+    /// Show progress during shader compilation
+    #[arg(long, default_value = "true")]
+    pub progress: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct GamesArgs {
+    #[command(subcommand)]
+    pub command: GamesCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum GamesCommand {
+    /// List all detected games
+    List(GamesListArgs),
+    /// Show details for a specific game
+    Show(GamesShowArgs),
+    /// Scan for new games
+    Scan(GamesScanArgs),
+    /// Assign a profile to a game
+    SetProfile(GamesSetProfileArgs),
+    /// Show game launch command
+    Info(GamesInfoArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct GamesListArgs {
+    /// Filter by source (steam, heroic, lutris)
+    #[arg(long)]
+    pub source: Option<String>,
+
+    /// Output format
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    pub format: OutputFormat,
+}
+
+#[derive(Debug, Args)]
+pub struct GamesShowArgs {
+    /// Steam AppID or game identifier
+    pub game_id: String,
+}
+
+#[derive(Debug, Args)]
+pub struct GamesScanArgs {
+    /// Rescan all sources
+    #[arg(long)]
+    pub all: bool,
+
+    /// Generate fingerprints for executables
+    #[arg(long)]
+    pub fingerprint: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct GamesSetProfileArgs {
+    /// Steam AppID or game identifier
+    pub game_id: String,
+
+    /// Profile name to assign
+    pub profile: String,
+}
+
+#[derive(Debug, Args)]
+pub struct GamesInfoArgs {
+    /// Steam AppID or game identifier
+    pub game_id: String,
+
+    /// Show full launch command
+    #[arg(long)]
+    pub command: bool,
 }
 
 #[derive(Debug, Args)]

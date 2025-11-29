@@ -28,6 +28,8 @@ pub struct GameRecord {
     pub last_seen: u64,
     #[serde(default)]
     pub metadata: HashMap<String, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
 }
 
 impl GameDatabase {
@@ -67,6 +69,7 @@ impl GameDatabase {
                     fingerprint: game.fingerprint.clone(),
                     last_seen: timestamp,
                     metadata: game.metadata.clone(),
+                    profile: None,
                 });
             entry.install_dir = game.install_dir.clone();
             entry.executable = game.executable.clone();
@@ -75,8 +78,59 @@ impl GameDatabase {
             entry.metadata.extend(game.metadata.clone());
         }
     }
+
+    /// Get a game by ID (searches all sources)
+    pub fn get(&self, game_id: &str) -> Option<DetectedGame> {
+        // Try direct key lookup first
+        for (key, record) in &self.entries {
+            if key.ends_with(&format!(":{}", game_id)) || key == game_id {
+                return Some(record_to_detected(game_id, record));
+            }
+        }
+        None
+    }
+
+    /// Iterate over all games
+    pub fn games(&self) -> impl Iterator<Item = DetectedGame> + '_ {
+        self.entries.iter().map(|(key, record)| {
+            let id = key.split(':').nth(1).unwrap_or(key);
+            record_to_detected(id, record)
+        })
+    }
+
+    /// Set profile for a game
+    pub fn set_game_profile(&mut self, game_id: &str, profile: &str) {
+        for (key, record) in &mut self.entries {
+            if key.ends_with(&format!(":{}", game_id)) || key == game_id {
+                record.profile = Some(profile.to_string());
+                break;
+            }
+        }
+    }
+
+    /// Get profile for a game
+    pub fn get_game_profile(&self, game_id: &str) -> Option<&str> {
+        for (key, record) in &self.entries {
+            if key.ends_with(&format!(":{}", game_id)) || key == game_id {
+                return record.profile.as_deref();
+            }
+        }
+        None
+    }
 }
 
 fn game_key(game: &DetectedGame) -> String {
     format!("{}:{}", game.source, game.id)
+}
+
+fn record_to_detected(id: &str, record: &GameRecord) -> DetectedGame {
+    DetectedGame {
+        source: record.source.clone(),
+        id: id.to_string(),
+        name: record.name.clone(),
+        install_dir: record.install_dir.clone(),
+        executable: record.executable.clone(),
+        fingerprint: record.fingerprint.clone(),
+        metadata: record.metadata.clone(),
+    }
 }
