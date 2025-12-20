@@ -10,7 +10,7 @@ use crate::cli::ConfigCommand;
 
 const CONFIG_FILE_BASENAME: &str = "config.yaml";
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct NvConfig {
     #[serde(default)]
     pub library_paths: LibraryPaths,
@@ -18,16 +18,6 @@ pub struct NvConfig {
     pub detectors: DetectorConfig,
     #[serde(default)]
     pub profile: ProfileConfig,
-}
-
-impl Default for NvConfig {
-    fn default() -> Self {
-        Self {
-            library_paths: LibraryPaths::default(),
-            detectors: DetectorConfig::default(),
-            profile: ProfileConfig::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

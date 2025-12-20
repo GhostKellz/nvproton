@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::config::ConfigPaths;
+use crate::detection::steam::is_excluded_appid;
 use crate::detection::{DetectedGame, GameSource};
 
 const DATABASE_FILE: &str = "games.yaml";
@@ -90,12 +91,30 @@ impl GameDatabase {
         None
     }
 
-    /// Iterate over all games
+    /// Iterate over all games (excluding Steam internals like Proton/Runtime)
     pub fn games(&self) -> impl Iterator<Item = DetectedGame> + '_ {
-        self.entries.iter().map(|(key, record)| {
+        self.entries.iter().filter_map(|(key, record)| {
             let id = key.split(':').nth(1).unwrap_or(key);
-            record_to_detected(id, record)
+            // Skip excluded Steam apps (Proton, Runtime, Redistributables)
+            if record.source == GameSource::Steam && is_excluded_appid(id) {
+                return None;
+            }
+            Some(record_to_detected(id, record))
         })
+    }
+
+    /// Remove excluded Steam apps from database (cleanup)
+    pub fn cleanup_excluded(&mut self) -> usize {
+        let before = self.entries.len();
+        self.entries.retain(|key, record| {
+            if record.source == GameSource::Steam {
+                let id = key.split(':').nth(1).unwrap_or(key);
+                !is_excluded_appid(id)
+            } else {
+                true
+            }
+        });
+        before - self.entries.len()
     }
 
     /// Set profile for a game

@@ -26,10 +26,10 @@ impl ProfileManager {
             if !entry.file_type()?.is_file() {
                 continue;
             }
-            if entry.path().extension().and_then(|ext| ext.to_str()) == Some("yaml") {
-                if let Some(stem) = entry.path().file_stem().and_then(|s| s.to_str()) {
-                    profiles.push(stem.to_string());
-                }
+            if entry.path().extension().and_then(|ext| ext.to_str()) == Some("yaml")
+                && let Some(stem) = entry.path().file_stem().and_then(|s| s.to_str())
+            {
+                profiles.push(stem.to_string());
             }
         }
         profiles.sort();

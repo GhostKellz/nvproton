@@ -50,8 +50,8 @@ impl LutrisDetector {
             Ok(Ok(games)) => games,
             _ => {
                 // Fall back to old schema with exe column
-                let mut statement = connection
-                    .prepare("SELECT slug, name, directory, exe, runner FROM games")?;
+                let mut statement =
+                    connection.prepare("SELECT slug, name, directory, exe, runner FROM games")?;
                 statement
                     .query_map([], |row| {
                         Ok(LutrisGame {

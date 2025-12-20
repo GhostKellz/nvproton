@@ -35,6 +35,11 @@ impl SteamDetector {
             for entry in glob(manifest_pattern.to_string_lossy().as_ref())? {
                 let path = entry?;
                 if let Some(manifest) = parse_manifest(&path)? {
+                    // Skip Steam internals (Proton, Runtime, Redistributables)
+                    if is_excluded_appid(&manifest.appid) {
+                        continue;
+                    }
+
                     let install_dir = library
                         .join("steamapps")
                         .join("common")
@@ -125,36 +130,178 @@ fn parse_manifest(path: &Path) -> Result<Option<Manifest>> {
     })
 }
 
+/// AppIDs that are Steam internals, not actual games
+const EXCLUDED_APPIDS: &[&str] = &[
+    "228980",  // Steamworks Common Redistributables
+    "1493710", // Proton Experimental
+    "1628350", // Steam Linux Runtime 3.0 (sniper)
+    "1887720", // Proton 8.0
+    "2180100", // Proton 9.0
+    "2348590", // Proton 9.0 (another)
+    "3658110", // Proton 10.0
+    "1391110", // Steam Linux Runtime
+    "2805730", // Steam Linux Runtime (soldier)
+];
+
+pub fn is_excluded_appid(appid: &str) -> bool {
+    EXCLUDED_APPIDS.contains(&appid)
+}
+
 fn locate_primary_executable(install_dir: &Path) -> Option<PathBuf> {
     if !install_dir.exists() {
         return None;
     }
+
+    // Collect all .exe files first
+    let mut exe_candidates: Vec<PathBuf> = Vec::new();
+
     for entry in WalkDir::new(install_dir)
-        .max_depth(3)
+        .max_depth(4)
         .into_iter()
         .filter_map(Result::ok)
         .filter(|e| e.file_type().is_file())
     {
         let path = entry.path();
-        let lowercase = path
+        let ext = path
             .extension()
             .and_then(|s| s.to_str())
             .unwrap_or("")
             .to_ascii_lowercase();
-        if matches!(lowercase.as_str(), "exe" | "sh" | "appimage") {
-            return Some(path.to_path_buf());
+
+        // Only consider actual Windows executables
+        if ext == "exe" {
+            let filename = path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+
+            // Skip known non-game executables
+            if is_launcher_or_tool(&filename) {
+                continue;
+            }
+
+            exe_candidates.push(path.to_path_buf());
         }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            if entry
-                .metadata()
-                .map(|m| m.permissions().mode() & 0o111 != 0)
-                .unwrap_or(false)
-            {
-                return Some(path.to_path_buf());
+    }
+
+    // Prioritize executables by likelihood of being the main game
+    exe_candidates.sort_by(|a, b| {
+        let a_score = score_executable(a, install_dir);
+        let b_score = score_executable(b, install_dir);
+        b_score.cmp(&a_score) // Higher score first
+    });
+
+    exe_candidates.into_iter().next()
+}
+
+/// Check if executable is a launcher/tool rather than the main game
+fn is_launcher_or_tool(filename: &str) -> bool {
+    const SKIP_PATTERNS: &[&str] = &[
+        "unins",
+        "uninst",
+        "setup",
+        "install",
+        "update",
+        "patch",
+        "crash",
+        "reporter",
+        "helper",
+        "service",
+        "launcher",
+        "easyanticheat",
+        "battleye",
+        "dxsetup",
+        "vcredist",
+        "dotnet",
+        "directx",
+        "physx",
+        "ue4prereq",
+        "redist",
+        "cef",
+        "subprocess",
+        "browser",
+        "webhelper",
+        "upc",
+        "uplay",
+        "origin",
+        "epic",
+    ];
+
+    for pattern in SKIP_PATTERNS {
+        if filename.contains(pattern) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Score an executable by how likely it is to be the main game
+fn score_executable(path: &Path, install_dir: &Path) -> i32 {
+    let mut score = 0;
+
+    let filename = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+
+    let dirname = install_dir
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+
+    // Bonus: exe name matches directory name (common pattern)
+    let exe_stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    if dirname.contains(&exe_stem) || exe_stem.contains(&dirname.replace(" ", "")) {
+        score += 50;
+    }
+
+    // Bonus: in root or bin directory (not deep subdirectories)
+    let depth = path
+        .strip_prefix(install_dir)
+        .map(|p| p.components().count())
+        .unwrap_or(10);
+    if depth <= 1 {
+        score += 30;
+    } else if depth == 2 {
+        // Common pattern: game/bin/game.exe
+        if let Some(parent) = path.parent() {
+            let parent_name = parent.file_name().and_then(|s| s.to_str()).unwrap_or("");
+            if parent_name == "bin" || parent_name == "Binaries" || parent_name == "x64" {
+                score += 25;
             }
         }
     }
-    None
+
+    // Bonus: common game executable patterns
+    if filename.ends_with("-win64-shipping.exe") || filename.ends_with("_win64.exe") {
+        score += 20;
+    }
+    if filename.contains("game") || filename.contains("client") {
+        score += 10;
+    }
+
+    // Penalty: likely not the main game
+    if filename.contains("server") && !filename.contains("dedicated") {
+        score -= 10;
+    }
+
+    // Penalty: very small files are usually not the game
+    if let Ok(metadata) = path.metadata() {
+        if metadata.len() < 1_000_000 {
+            // Less than 1MB
+            score -= 20;
+        } else if metadata.len() > 50_000_000 {
+            // Over 50MB, likely the real game
+            score += 15;
+        }
+    }
+
+    score
 }

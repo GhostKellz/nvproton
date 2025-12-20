@@ -32,9 +32,12 @@ fn handle_launch_options(
 ) -> Result<()> {
     let db = GameDatabase::load_or_default(manager.paths())?;
 
-    let game = db
-        .get(&args.game_id)
-        .ok_or_else(|| anyhow::anyhow!("Game '{}' not found. Run 'nvproton games scan' first.", args.game_id))?;
+    let game = db.get(&args.game_id).ok_or_else(|| {
+        anyhow::anyhow!(
+            "Game '{}' not found. Run 'nvproton games scan' first.",
+            args.game_id
+        )
+    })?;
 
     println!("Launch Options for: {} ({})", game.name, game.id);
     println!();
@@ -66,7 +69,10 @@ fn handle_launch_options(
 
     // Shader cache path
     if args.shader_cache {
-        options.push(format!("DXVK_STATE_CACHE_PATH=~/.cache/nvproton/{}", game.id));
+        options.push(format!(
+            "DXVK_STATE_CACHE_PATH=~/.cache/nvproton/{}",
+            game.id
+        ));
     }
 
     // MangoHud
@@ -99,7 +105,10 @@ fn handle_launch_options(
         }
         println!();
         println!("Full launch command:");
-        println!("  {}", build_steam_launch_string(&options, args.use_nvproton));
+        println!(
+            "  {}",
+            build_steam_launch_string(&options, args.use_nvproton)
+        );
     }
 
     println!();
@@ -175,9 +184,7 @@ fn handle_proton(
             }
 
             // Check Steam's Proton installs
-            let proton_dirs = [
-                steam_path.join("steamapps/common"),
-            ];
+            let proton_dirs = [steam_path.join("steamapps/common")];
 
             println!("\nSteam-installed:");
             for dir in &proton_dirs {
@@ -355,14 +362,17 @@ fn handle_shortcut(
                         crate::profile::ProfileManager::new(manager.paths().profiles_dir.clone());
                     if let Ok(resolved) = profile_manager.resolve(&profile_name) {
                         // Extract env vars from profile
-                        if let serde_yaml::Value::Mapping(map) = &resolved.settings {
-                            if let Some(serde_yaml::Value::Mapping(env)) =
-                                map.get(&serde_yaml::Value::String("env".into()))
-                            {
-                                for (k, v) in env {
-                                    if let (serde_yaml::Value::String(key), serde_yaml::Value::String(val)) = (k, v) {
-                                        options.push(format!("{}={}", key, val));
-                                    }
+                        if let serde_yaml::Value::Mapping(map) = &resolved.settings
+                            && let Some(serde_yaml::Value::Mapping(env)) =
+                                map.get(serde_yaml::Value::String("env".into()))
+                        {
+                            for (k, v) in env {
+                                if let (
+                                    serde_yaml::Value::String(key),
+                                    serde_yaml::Value::String(val),
+                                ) = (k, v)
+                                {
+                                    options.push(format!("{}={}", key, val));
                                 }
                             }
                         }

@@ -43,7 +43,7 @@ fn handle_list(args: GamesListArgs, manager: &ConfigManager, _config: &NvConfig)
 
     match args.format {
         OutputFormat::Text => {
-            println!("{:<12} {:<10} {}", "ID", "Source", "Name");
+            println!("{:<12} {:<10} Name", "ID", "Source");
             println!("{}", "-".repeat(60));
             for game in &games {
                 println!("{:<12} {:<10} {}", game.id, game.source, game.name);
@@ -129,6 +129,13 @@ fn handle_scan(args: GamesScanArgs, manager: &ConfigManager, config: &mut NvConf
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
         .as_secs();
+
+    // Clean out old excluded entries (Proton, Runtime, etc.)
+    let cleaned = db.cleanup_excluded();
+    if cleaned > 0 {
+        println!("  Cleaned: {} excluded entries removed", cleaned);
+    }
+
     db.merge_detected(&all_games, timestamp);
     db.save(manager.paths())?;
 

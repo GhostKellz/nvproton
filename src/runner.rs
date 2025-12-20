@@ -35,10 +35,10 @@ impl<'a> RunContext<'a> {
 
     /// Find a game by ID or name
     pub fn find_game(&self, id: Option<&str>, name: Option<&str>) -> Result<DetectedGame> {
-        if let Some(game_id) = id {
-            if let Some(game) = self.game_db.get(game_id) {
-                return Ok(game.clone());
-            }
+        if let Some(game_id) = id
+            && let Some(game) = self.game_db.get(game_id)
+        {
+            return Ok(game.clone());
         }
 
         if let Some(game_name) = name {
@@ -170,7 +170,10 @@ pub fn handle_prepare(
     if game.install_dir.exists() {
         println!("  Install directory: OK");
     } else {
-        eprintln!("  Warning: Install directory not found: {:?}", game.install_dir);
+        eprintln!(
+            "  Warning: Install directory not found: {:?}",
+            game.install_dir
+        );
     }
 
     if let Some(exe) = &game.executable {
@@ -237,13 +240,13 @@ fn get_shader_cache_paths(game: &DetectedGame) -> Vec<PathBuf> {
     }
 
     // Steam shader cache
-    if let GameSource::Steam = game.source {
-        if let Some(home) = dirs::home_dir() {
-            paths.push(
-                home.join(".local/share/Steam/steamapps/shadercache")
-                    .join(&game.id),
-            );
-        }
+    if let GameSource::Steam = game.source
+        && let Some(home) = dirs::home_dir()
+    {
+        paths.push(
+            home.join(".local/share/Steam/steamapps/shadercache")
+                .join(&game.id),
+        );
     }
 
     paths
@@ -280,10 +283,7 @@ fn build_launch_command(game: &DetectedGame, extra_args: &[String]) -> Result<Ve
                 cmd.push(exe.to_string_lossy().into_owned());
                 cmd.extend(extra_args.iter().cloned());
             } else {
-                anyhow::bail!(
-                    "Cannot launch game '{}' - no executable found",
-                    game.name
-                );
+                anyhow::bail!("Cannot launch game '{}' - no executable found", game.name);
             }
         }
     }
@@ -296,7 +296,7 @@ fn apply_profile_to_env(settings: &serde_yaml::Value, env_vars: &mut HashMap<Str
     if let serde_yaml::Value::Mapping(map) = settings {
         // Handle env section directly
         if let Some(serde_yaml::Value::Mapping(env_map)) =
-            map.get(&serde_yaml::Value::String("env".into()))
+            map.get(serde_yaml::Value::String("env".into()))
         {
             for (key, value) in env_map {
                 if let (serde_yaml::Value::String(k), serde_yaml::Value::String(v)) = (key, value) {
@@ -307,7 +307,7 @@ fn apply_profile_to_env(settings: &serde_yaml::Value, env_vars: &mut HashMap<Str
 
         // Handle nvidia section
         if let Some(serde_yaml::Value::Mapping(nvidia_map)) =
-            map.get(&serde_yaml::Value::String("nvidia".into()))
+            map.get(serde_yaml::Value::String("nvidia".into()))
         {
             for (key, value) in nvidia_map {
                 if let serde_yaml::Value::String(k) = key {
@@ -330,7 +330,7 @@ fn apply_profile_to_env(settings: &serde_yaml::Value, env_vars: &mut HashMap<Str
 
         // Handle dxvk section
         if let Some(serde_yaml::Value::Mapping(dxvk_map)) =
-            map.get(&serde_yaml::Value::String("dxvk".into()))
+            map.get(serde_yaml::Value::String("dxvk".into()))
         {
             for (key, value) in dxvk_map {
                 if let serde_yaml::Value::String(k) = key {

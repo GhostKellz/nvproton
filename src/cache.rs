@@ -5,6 +5,9 @@
 //! - Cache size monitoring
 //! - Cleanup utilities
 //! - Cache import/export for sharing
+//!
+//! Note: Many functions here are reserved for future nvshader integration.
+#![allow(dead_code)]
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -243,10 +246,10 @@ impl CacheManager {
             if path.exists() {
                 for entry in fs::read_dir(path)? {
                     let entry = entry?;
-                    if entry.file_type()?.is_dir() {
-                        if let Some(name) = entry.file_name().to_str() {
-                            games.insert(name.to_string());
-                        }
+                    if entry.file_type()?.is_dir()
+                        && let Some(name) = entry.file_name().to_str()
+                    {
+                        games.insert(name.to_string());
                     }
                 }
             }
@@ -360,14 +363,14 @@ impl CacheManager {
 
         if let Ok(entries) = fs::read_dir(path) {
             for entry in entries.flatten() {
-                if let Ok(metadata) = entry.metadata() {
-                    if let Ok(modified) = metadata.modified() {
-                        latest = Some(match latest {
-                            Some(l) if modified > l => modified,
-                            Some(l) => l,
-                            None => modified,
-                        });
-                    }
+                if let Ok(metadata) = entry.metadata()
+                    && let Ok(modified) = metadata.modified()
+                {
+                    latest = Some(match latest {
+                        Some(l) if modified > l => modified,
+                        Some(l) => l,
+                        None => modified,
+                    });
                 }
             }
         }
