@@ -188,12 +188,14 @@ pub fn handle_prepare(
     Ok(())
 }
 
-/// Pre-warm shader cache for a game
+/// Pre-warm shader cache for a game using nvshader library
 fn prewarm_shaders(game: &DetectedGame) -> Result<()> {
-    // Try to load nvshader library
+    // Try to load nvshader library from standard paths
     let lib_paths = [
         PathBuf::from("/usr/lib/nvproton"),
         PathBuf::from("/usr/local/lib/nvproton"),
+        PathBuf::from("/usr/lib"),
+        PathBuf::from("/usr/local/lib"),
         dirs::data_local_dir()
             .map(|d| d.join("nvproton/lib"))
             .unwrap_or_default(),
@@ -204,7 +206,40 @@ fn prewarm_shaders(game: &DetectedGame) -> Result<()> {
         if shader_lib.exists() {
             match unsafe { ffi::NvShader::load(&shader_lib) } {
                 Ok(nvshader) => {
-                    return nvshader.warm_cache(&game.id).map_err(Into::into);
+                    // Check if pre-warming is available (fossilize_replay found)
+                    if !nvshader.prewarm_available() {
+                        log::info!("fossilize_replay not available - skipping shader pre-warm");
+                        return Ok(());
+                    }
+
+                    // Scan for caches first
+                    if let Err(e) = nvshader.scan() {
+                        log::warn!("Failed to scan shader caches: {}", e);
+                        return Ok(());
+                    }
+
+                    // Pre-warm shaders for this game
+                    match nvshader.prewarm_game(&game.id) {
+                        Ok(result) => {
+                            if result.total > 0 {
+                                println!(
+                                    "  Shaders: {}/{} compiled ({} failed, {} skipped)",
+                                    result.completed, result.total, result.failed, result.skipped
+                                );
+                            } else {
+                                println!("  Shaders: No Fossilize caches found for this game");
+                            }
+                            return Ok(());
+                        }
+                        Err(ffi::FfiError::Operation { code: -5 }) => {
+                            // Game not found in caches - that's OK
+                            log::debug!("No shader cache found for game {}", game.id);
+                        }
+                        Err(e) => {
+                            log::warn!("Failed to pre-warm shaders: {}", e);
+                        }
+                    }
+                    return Ok(());
                 }
                 Err(e) => {
                     log::debug!("Failed to load nvshader from {:?}: {}", shader_lib, e);
@@ -222,7 +257,7 @@ fn prewarm_shaders(game: &DetectedGame) -> Result<()> {
         }
     }
 
-    log::warn!("No shader cache found - first launch may have stuttering");
+    log::debug!("nvshader library not found - shader pre-warming unavailable");
     Ok(())
 }
 
