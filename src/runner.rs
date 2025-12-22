@@ -191,7 +191,8 @@ pub fn handle_prepare(
 /// Pre-warm shader cache for a game using nvshader library
 fn prewarm_shaders(game: &DetectedGame) -> Result<()> {
     // Try to load nvshader library from standard paths
-    let lib_paths = [
+    // NVPROTON_LIB_PATH env var can override for development
+    let mut lib_paths = vec![
         PathBuf::from("/usr/lib/nvproton"),
         PathBuf::from("/usr/local/lib/nvproton"),
         PathBuf::from("/usr/lib"),
@@ -200,6 +201,11 @@ fn prewarm_shaders(game: &DetectedGame) -> Result<()> {
             .map(|d| d.join("nvproton/lib"))
             .unwrap_or_default(),
     ];
+
+    // Prepend custom path from environment if set
+    if let Ok(custom_path) = env::var("NVPROTON_LIB_PATH") {
+        lib_paths.insert(0, PathBuf::from(custom_path));
+    }
 
     for path in &lib_paths {
         let shader_lib = path.join("libnvshader.so");
