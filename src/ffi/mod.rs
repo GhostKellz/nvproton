@@ -110,8 +110,9 @@ impl NvShader {
     pub fn get_stats(&self) -> FfiResult<NvShaderStats> {
         let mut stats = NvShaderStats::default();
         unsafe {
-            let func: libloading::Symbol<unsafe extern "C" fn(*mut c_void, *mut NvShaderStats) -> c_int> =
-                self.library.get(b"nvshader_get_stats\0")?;
+            let func: libloading::Symbol<
+                unsafe extern "C" fn(*mut c_void, *mut NvShaderStats) -> c_int,
+            > = self.library.get(b"nvshader_get_stats\0")?;
             let status = func(self.ctx, &mut stats);
             if status != 0 {
                 return Err(FfiError::Operation { code: status });
@@ -126,7 +127,11 @@ impl NvShader {
         let mut result = NvShaderPrewarmResult::default();
         unsafe {
             let func: libloading::Symbol<
-                unsafe extern "C" fn(*mut c_void, *const c_char, *mut NvShaderPrewarmResult) -> c_int,
+                unsafe extern "C" fn(
+                    *mut c_void,
+                    *const c_char,
+                    *mut NvShaderPrewarmResult,
+                ) -> c_int,
             > = self.library.get(b"nvshader_prewarm_game\0")?;
             let status = func(self.ctx, game_id.as_ptr(), &mut result);
             if status != 0 {
@@ -209,7 +214,10 @@ impl NvShader {
 impl Drop for NvShader {
     fn drop(&mut self) {
         unsafe {
-            if let Ok(func) = self.library.get::<unsafe extern "C" fn(*mut c_void)>(b"nvshader_destroy\0") {
+            if let Ok(func) = self
+                .library
+                .get::<unsafe extern "C" fn(*mut c_void)>(b"nvshader_destroy\0")
+            {
                 func(self.ctx);
             }
         }
@@ -373,7 +381,10 @@ impl Drop for NvLatency {
     fn drop(&mut self) {
         if !self.ctx.is_null() {
             unsafe {
-                if let Ok(func) = self.library.get::<unsafe extern "C" fn(*mut c_void)>(b"nvlat_destroy\0") {
+                if let Ok(func) = self
+                    .library
+                    .get::<unsafe extern "C" fn(*mut c_void)>(b"nvlat_destroy\0")
+                {
                     func(self.ctx);
                 }
             }
@@ -451,12 +462,20 @@ impl Default for NvSyncDisplay {
 
 impl NvSyncDisplay {
     pub fn name_str(&self) -> &str {
-        let end = self.name.iter().position(|&c| c == 0).unwrap_or(self.name.len());
+        let end = self
+            .name
+            .iter()
+            .position(|&c| c == 0)
+            .unwrap_or(self.name.len());
         std::str::from_utf8(&self.name[..end]).unwrap_or("")
     }
 
     pub fn connector_str(&self) -> &str {
-        let end = self.connector.iter().position(|&c| c == 0).unwrap_or(self.connector.len());
+        let end = self
+            .connector
+            .iter()
+            .position(|&c| c == 0)
+            .unwrap_or(self.connector.len());
         std::str::from_utf8(&self.connector[..end]).unwrap_or("")
     }
 }
@@ -490,12 +509,20 @@ impl Default for NvSyncStatus {
 
 impl NvSyncStatus {
     pub fn driver_version_str(&self) -> &str {
-        let end = self.driver_version.iter().position(|&c| c == 0).unwrap_or(self.driver_version.len());
+        let end = self
+            .driver_version
+            .iter()
+            .position(|&c| c == 0)
+            .unwrap_or(self.driver_version.len());
         std::str::from_utf8(&self.driver_version[..end]).unwrap_or("")
     }
 
     pub fn compositor_str(&self) -> &str {
-        let end = self.compositor.iter().position(|&c| c == 0).unwrap_or(self.compositor.len());
+        let end = self
+            .compositor
+            .iter()
+            .position(|&c| c == 0)
+            .unwrap_or(self.compositor.len());
         std::str::from_utf8(&self.compositor[..end]).unwrap_or("")
     }
 }
@@ -595,11 +622,15 @@ impl NvSync {
     /// Enable VRR on a display (None for all displays)
     pub fn enable_vrr(&self, display_name: Option<&str>) -> FfiResult<()> {
         let name_cstring = display_name.map(|s| CString::new(s)).transpose()?;
-        let name_ptr = name_cstring.as_ref().map(|s| s.as_ptr()).unwrap_or(std::ptr::null());
+        let name_ptr = name_cstring
+            .as_ref()
+            .map(|s| s.as_ptr())
+            .unwrap_or(std::ptr::null());
 
         unsafe {
-            let func: libloading::Symbol<unsafe extern "C" fn(*mut c_void, *const c_char) -> c_int> =
-                self.library.get(b"nvsync_enable_vrr\0")?;
+            let func: libloading::Symbol<
+                unsafe extern "C" fn(*mut c_void, *const c_char) -> c_int,
+            > = self.library.get(b"nvsync_enable_vrr\0")?;
             let status = func(self.ctx, name_ptr);
             if status != 0 {
                 return Err(FfiError::Operation { code: status });
@@ -611,11 +642,15 @@ impl NvSync {
     /// Disable VRR on a display (None for all displays)
     pub fn disable_vrr(&self, display_name: Option<&str>) -> FfiResult<()> {
         let name_cstring = display_name.map(|s| CString::new(s)).transpose()?;
-        let name_ptr = name_cstring.as_ref().map(|s| s.as_ptr()).unwrap_or(std::ptr::null());
+        let name_ptr = name_cstring
+            .as_ref()
+            .map(|s| s.as_ptr())
+            .unwrap_or(std::ptr::null());
 
         unsafe {
-            let func: libloading::Symbol<unsafe extern "C" fn(*mut c_void, *const c_char) -> c_int> =
-                self.library.get(b"nvsync_disable_vrr\0")?;
+            let func: libloading::Symbol<
+                unsafe extern "C" fn(*mut c_void, *const c_char) -> c_int,
+            > = self.library.get(b"nvsync_disable_vrr\0")?;
             let status = func(self.ctx, name_ptr);
             if status != 0 {
                 return Err(FfiError::Operation { code: status });
@@ -696,7 +731,10 @@ impl NvSync {
 impl Drop for NvSync {
     fn drop(&mut self) {
         unsafe {
-            if let Ok(func) = self.library.get::<unsafe extern "C" fn(*mut c_void)>(b"nvsync_destroy\0") {
+            if let Ok(func) = self
+                .library
+                .get::<unsafe extern "C" fn(*mut c_void)>(b"nvsync_destroy\0")
+            {
                 func(self.ctx);
             }
         }

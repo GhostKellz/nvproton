@@ -73,22 +73,41 @@ pub fn handle_run(args: RunArgs, manager: &ConfigManager, config: &mut NvConfig)
         apply_profile_to_env(&resolved.settings, &mut env_vars);
     }
 
-    // NVIDIA-specific optimizations
+    // NVIDIA-specific optimizations via FFI
+    // Configure Reflex via nvlatency library
     if args.reflex {
+        // Set environment variables as fallback for DXVK/Wine
         env_vars.insert("__GL_REFLEX".into(), "1".into());
         env_vars.insert("DXVK_NVAPI_ALLOW_REFLEX".into(), "1".into());
-        println!("  Reflex: enabled");
+
+        // Also configure via FFI for native applications
+        if let Err(e) = configure_reflex(true) {
+            log::warn!("Reflex FFI configuration failed: {}", e);
+            println!("  Reflex: enabled (env vars only)");
+        }
     }
 
+    // Configure VRR and frame limiting via nvsync library
     if args.fps > 0 {
         env_vars.insert("DXVK_FRAME_RATE".into(), args.fps.to_string());
-        println!("  FPS Limit: {}", args.fps);
     }
 
     if args.vrr {
         env_vars.insert("__GL_GSYNC_ALLOWED".into(), "1".into());
         env_vars.insert("__GL_VRR_ALLOWED".into(), "1".into());
-        println!("  VRR: enabled");
+    }
+
+    // Configure via FFI for system-level VRR and frame limiting
+    if args.vrr || args.fps > 0 {
+        if let Err(e) = configure_vrr(args.vrr, args.fps) {
+            log::warn!("VRR/FPS FFI configuration failed: {}", e);
+            if args.vrr {
+                println!("  VRR: enabled (env vars only)");
+            }
+            if args.fps > 0 {
+                println!("  FPS Limit: {} (env vars only)", args.fps);
+            }
+        }
     }
 
     // Shader pre-warming
@@ -188,10 +207,116 @@ pub fn handle_prepare(
     Ok(())
 }
 
-/// Pre-warm shader cache for a game using nvshader library
-fn prewarm_shaders(game: &DetectedGame) -> Result<()> {
-    // Try to load nvshader library from standard paths
-    // NVPROTON_LIB_PATH env var can override for development
+/// Configure Reflex low-latency mode using nvlatency library
+fn configure_reflex(enabled: bool) -> Result<()> {
+    if !enabled {
+        return Ok(());
+    }
+
+    let lib_paths = get_lib_paths();
+
+    for path in &lib_paths {
+        let latency_lib = path.join("libnvlatency.so");
+        if latency_lib.exists() {
+            match unsafe { ffi::NvLatency::load(&latency_lib) } {
+                Ok(nvlatency) => {
+                    // Check if NVIDIA GPU is present
+                    if !nvlatency.is_nvidia_gpu() {
+                        log::warn!("Reflex requires NVIDIA GPU");
+                        return Ok(());
+                    }
+
+                    // Check if Reflex is supported
+                    if !nvlatency.is_supported() {
+                        log::info!("Reflex not supported on this configuration");
+                        return Ok(());
+                    }
+
+                    // Enable Reflex in On mode (not Boost, as that's more aggressive)
+                    if let Err(e) = nvlatency.set_reflex_mode(ffi::ReflexMode::On) {
+                        log::warn!("Failed to enable Reflex: {}", e);
+                    } else {
+                        println!("  Reflex: enabled via nvlatency");
+                    }
+                    return Ok(());
+                }
+                Err(e) => {
+                    log::debug!("Failed to load nvlatency from {:?}: {}", latency_lib, e);
+                }
+            }
+        }
+    }
+
+    log::debug!("nvlatency library not found - Reflex FFI unavailable");
+    Ok(())
+}
+
+/// Configure VRR (G-Sync/FreeSync) and frame limiter using nvsync library
+fn configure_vrr(enabled: bool, fps_limit: u32) -> Result<()> {
+    // Skip if nothing to configure
+    if !enabled && fps_limit == 0 {
+        return Ok(());
+    }
+
+    let lib_paths = get_lib_paths();
+
+    for path in &lib_paths {
+        let sync_lib = path.join("libnvsync.so");
+        if sync_lib.exists() {
+            match unsafe { ffi::NvSync::load(&sync_lib) } {
+                Ok(nvsync) => {
+                    // Scan for displays
+                    if let Err(e) = nvsync.scan() {
+                        log::warn!("Failed to scan displays: {}", e);
+                        return Ok(());
+                    }
+
+                    // Get system status
+                    if let Ok(status) = nvsync.get_status() {
+                        if !status.nvidia_detected {
+                            log::warn!("VRR requires NVIDIA GPU");
+                            return Ok(());
+                        }
+
+                        if status.vrr_capable_count == 0 {
+                            log::info!("No VRR-capable displays detected");
+                            return Ok(());
+                        }
+                    }
+
+                    // Enable VRR if requested
+                    if enabled {
+                        if let Err(e) = nvsync.enable_vrr(None) {
+                            log::warn!("Failed to enable VRR: {}", e);
+                        } else {
+                            println!("  VRR: enabled via nvsync");
+                        }
+                    }
+
+                    // Set frame limit if requested
+                    if fps_limit > 0 {
+                        if let Err(e) = nvsync.set_frame_limit(fps_limit) {
+                            log::warn!("Failed to set frame limit: {}", e);
+                        } else {
+                            println!("  Frame limit: {} FPS via nvsync", fps_limit);
+                        }
+                    }
+
+                    return Ok(());
+                }
+                Err(e) => {
+                    log::debug!("Failed to load nvsync from {:?}: {}", sync_lib, e);
+                }
+            }
+        }
+    }
+
+    log::debug!("nvsync library not found - VRR FFI unavailable");
+    Ok(())
+}
+
+/// Get standard library search paths
+fn get_lib_paths() -> Vec<PathBuf> {
     let mut lib_paths = vec![
         PathBuf::from("/usr/lib/nvproton"),
         PathBuf::from("/usr/local/lib/nvproton"),
@@ -206,6 +331,13 @@ fn prewarm_shaders(game: &DetectedGame) -> Result<()> {
     if let Ok(custom_path) = env::var("NVPROTON_LIB_PATH") {
         lib_paths.insert(0, PathBuf::from(custom_path));
     }
+
+    lib_paths
+}
+
+/// Pre-warm shader cache for a game using nvshader library
+fn prewarm_shaders(game: &DetectedGame) -> Result<()> {
+    let lib_paths = get_lib_paths();
 
     for path in &lib_paths {
         let shader_lib = path.join("libnvshader.so");
