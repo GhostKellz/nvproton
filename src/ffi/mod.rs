@@ -745,33 +745,155 @@ impl Drop for NvSync {
 // Library Loading Helpers
 // =============================================================================
 
-/// Standard library search paths
+/// Standard library search paths (ordered by priority)
 pub const LIB_PATHS: &[&str] = &[
+    // User-local installations (highest priority)
+    // Note: ~/.local/lib/nvproton checked via XDG_DATA_HOME
     "/usr/lib/nvproton",
     "/usr/local/lib/nvproton",
+    // System paths
+    "/usr/lib/x86_64-linux-gnu",  // Debian/Ubuntu multiarch
+    "/usr/lib64",                  // Fedora/RHEL
     "/usr/lib",
     "/usr/local/lib",
+    // Development paths (for testing)
+    "/data/projects/nvproton/target/release",
+    "/data/projects/nvproton/target/debug",
 ];
+
+/// Environment variables for library path override
+const ENV_LIB_PATH: &str = "NVPROTON_LIB_PATH";
+const ENV_SHADER_LIB: &str = "NVPROTON_SHADER_LIB";
+const ENV_LATENCY_LIB: &str = "NVPROTON_LATENCY_LIB";
+const ENV_SYNC_LIB: &str = "NVPROTON_SYNC_LIB";
+
+/// Library discovery result
+#[derive(Debug, Clone)]
+pub struct LibraryDiscovery {
+    pub nvshader: Option<std::path::PathBuf>,
+    pub nvlatency: Option<std::path::PathBuf>,
+    pub nvsync: Option<std::path::PathBuf>,
+    pub search_paths: Vec<std::path::PathBuf>,
+}
+
+impl LibraryDiscovery {
+    /// Discover all available libraries
+    pub fn discover() -> Self {
+        let search_paths = Self::build_search_paths();
+
+        Self {
+            nvshader: Self::find_library_in_paths("libnvshader.so", &search_paths)
+                .or_else(|| std::env::var(ENV_SHADER_LIB).ok().map(std::path::PathBuf::from)),
+            nvlatency: Self::find_library_in_paths("libnvlatency.so", &search_paths)
+                .or_else(|| std::env::var(ENV_LATENCY_LIB).ok().map(std::path::PathBuf::from)),
+            nvsync: Self::find_library_in_paths("libnvsync.so", &search_paths)
+                .or_else(|| std::env::var(ENV_SYNC_LIB).ok().map(std::path::PathBuf::from)),
+            search_paths,
+        }
+    }
+
+    /// Build the complete list of search paths
+    fn build_search_paths() -> Vec<std::path::PathBuf> {
+        let mut paths = Vec::new();
+
+        // 1. Environment variable override (highest priority)
+        if let Ok(custom_path) = std::env::var(ENV_LIB_PATH) {
+            for path in custom_path.split(':') {
+                let p = std::path::PathBuf::from(path);
+                if p.is_dir() {
+                    paths.push(p);
+                }
+            }
+        }
+
+        // 2. XDG data directories
+        if let Some(data_dir) = dirs::data_local_dir() {
+            paths.push(data_dir.join("nvproton/lib"));
+        }
+        if let Some(data_dir) = dirs::data_dir() {
+            paths.push(data_dir.join("nvproton/lib"));
+        }
+
+        // 3. LD_LIBRARY_PATH
+        if let Ok(ld_path) = std::env::var("LD_LIBRARY_PATH") {
+            for path in ld_path.split(':') {
+                let p = std::path::PathBuf::from(path);
+                if p.is_dir() && !paths.contains(&p) {
+                    paths.push(p);
+                }
+            }
+        }
+
+        // 4. Standard system paths
+        for base in LIB_PATHS {
+            let p = std::path::PathBuf::from(base);
+            if !paths.contains(&p) {
+                paths.push(p);
+            }
+        }
+
+        // 5. Executable directory (for portable installs)
+        if let Ok(exe_path) = std::env::current_exe() {
+            if let Some(exe_dir) = exe_path.parent() {
+                let lib_dir = exe_dir.join("lib");
+                if lib_dir.is_dir() && !paths.contains(&lib_dir) {
+                    paths.push(lib_dir);
+                }
+                // Also check exe_dir itself
+                if !paths.contains(&exe_dir.to_path_buf()) {
+                    paths.push(exe_dir.to_path_buf());
+                }
+            }
+        }
+
+        paths
+    }
+
+    /// Find a library in the given search paths
+    fn find_library_in_paths(name: &str, paths: &[std::path::PathBuf]) -> Option<std::path::PathBuf> {
+        for base in paths {
+            let path = base.join(name);
+            if path.exists() && path.is_file() {
+                return Some(path);
+            }
+        }
+        None
+    }
+
+    /// Check if all libraries are available
+    pub fn all_available(&self) -> bool {
+        self.nvshader.is_some() && self.nvlatency.is_some() && self.nvsync.is_some()
+    }
+
+    /// Check if any library is available
+    pub fn any_available(&self) -> bool {
+        self.nvshader.is_some() || self.nvlatency.is_some() || self.nvsync.is_some()
+    }
+
+    /// Get human-readable status
+    pub fn status_string(&self) -> String {
+        let mut parts = Vec::new();
+        if self.nvshader.is_some() {
+            parts.push("nvshader");
+        }
+        if self.nvlatency.is_some() {
+            parts.push("nvlatency");
+        }
+        if self.nvsync.is_some() {
+            parts.push("nvsync");
+        }
+        if parts.is_empty() {
+            "No libraries found".to_string()
+        } else {
+            format!("Found: {}", parts.join(", "))
+        }
+    }
+}
 
 /// Try to load a library from standard paths
 pub fn find_library(name: &str) -> Option<std::path::PathBuf> {
-    // Check XDG data dir first
-    if let Some(data_dir) = dirs::data_local_dir() {
-        let path = data_dir.join("nvproton/lib").join(name);
-        if path.exists() {
-            return Some(path);
-        }
-    }
-
-    // Check standard paths
-    for base in LIB_PATHS {
-        let path = std::path::Path::new(base).join(name);
-        if path.exists() {
-            return Some(path);
-        }
-    }
-
-    None
+    let discovery = LibraryDiscovery::discover();
+    LibraryDiscovery::find_library_in_paths(name, &discovery.search_paths)
 }
 
 /// Load nvshader from standard paths
@@ -797,26 +919,65 @@ pub struct LoadedLibraries {
     pub shader: Option<NvShader>,
     pub latency: Option<NvLatency>,
     pub sync: Option<NvSync>,
+    pub discovery: LibraryDiscovery,
 }
 
 impl LoadedLibraries {
     /// Load all available libraries from standard paths
     pub fn load_available() -> Self {
+        let discovery = LibraryDiscovery::discover();
         Self {
-            shader: load_nvshader().ok(),
-            latency: load_nvlatency().ok(),
-            sync: load_nvsync().ok(),
+            shader: discovery.nvshader.as_ref().and_then(|p| unsafe { NvShader::load(p).ok() }),
+            latency: discovery.nvlatency.as_ref().and_then(|p| unsafe { NvLatency::load(p).ok() }),
+            sync: discovery.nvsync.as_ref().and_then(|p| unsafe { NvSync::load(p).ok() }),
+            discovery,
         }
     }
 
     /// Load all libraries from a specific root directory
     pub fn load_from<P: AsRef<Path>>(root: P) -> FfiResult<Self> {
         let root = root.as_ref();
+        let discovery = LibraryDiscovery {
+            nvshader: Some(root.join("libnvshader.so")),
+            nvlatency: Some(root.join("libnvlatency.so")),
+            nvsync: Some(root.join("libnvsync.so")),
+            search_paths: vec![root.to_path_buf()],
+        };
         Ok(Self {
             shader: unsafe { NvShader::load(root.join("libnvshader.so")).ok() },
             latency: unsafe { NvLatency::load(root.join("libnvlatency.so")).ok() },
             sync: unsafe { NvSync::load(root.join("libnvsync.so")).ok() },
+            discovery,
         })
+    }
+
+    /// Check if all libraries are loaded
+    pub fn all_loaded(&self) -> bool {
+        self.shader.is_some() && self.latency.is_some() && self.sync.is_some()
+    }
+
+    /// Check if any library is loaded
+    pub fn any_loaded(&self) -> bool {
+        self.shader.is_some() || self.latency.is_some() || self.sync.is_some()
+    }
+
+    /// Get status string for loaded libraries
+    pub fn status_string(&self) -> String {
+        let mut parts = Vec::new();
+        if self.shader.is_some() {
+            parts.push("nvshader");
+        }
+        if self.latency.is_some() {
+            parts.push("nvlatency");
+        }
+        if self.sync.is_some() {
+            parts.push("nvsync");
+        }
+        if parts.is_empty() {
+            "No libraries loaded".to_string()
+        } else {
+            format!("Loaded: {}", parts.join(", "))
+        }
     }
 }
 

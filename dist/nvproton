@@ -1,0 +1,179 @@
+#!/bin/bash
+# NVProton - NVIDIA-Optimized Proton Wrapper
+# Install to ~/.steam/root/compatibilitytools.d/nvproton/
+#
+# This wrapper integrates with nvproton CLI to provide:
+# - Per-game profiles and settings
+# - Shader cache management
+# - NVIDIA-specific optimizations (Reflex, VRR, etc.)
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+NVPROTON_VERSION="0.1.0"
+
+# Upstream Proton to wrap (configurable)
+UPSTREAM_PROTON="${NVPROTON_UPSTREAM_PROTON:-GE-Proton}"
+
+# Find upstream Proton
+find_upstream_proton() {
+    local search_paths=(
+        "$HOME/.steam/root/compatibilitytools.d"
+        "$HOME/.local/share/Steam/compatibilitytools.d"
+        "/usr/share/steam/compatibilitytools.d"
+    )
+
+    for base in "${search_paths[@]}"; do
+        # Try exact match first
+        if [[ -d "$base/$UPSTREAM_PROTON" ]]; then
+            echo "$base/$UPSTREAM_PROTON"
+            return 0
+        fi
+
+        # Try GE-Proton (latest)
+        local ge_latest=$(ls -d "$base"/GE-Proton* 2>/dev/null | sort -V | tail -1)
+        if [[ -n "$ge_latest" && -d "$ge_latest" ]]; then
+            echo "$ge_latest"
+            return 0
+        fi
+
+        # Try Proton-GE (older naming)
+        local ge_old=$(ls -d "$base"/Proton-*GE* 2>/dev/null | sort -V | tail -1)
+        if [[ -n "$ge_old" && -d "$ge_old" ]]; then
+            echo "$ge_old"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+# Extract Steam App ID from environment or arguments
+get_app_id() {
+    if [[ -n "$SteamAppId" ]]; then
+        echo "$SteamAppId"
+    elif [[ -n "$STEAM_COMPAT_APP_ID" ]]; then
+        echo "$STEAM_COMPAT_APP_ID"
+    else
+        # Try to extract from path
+        echo "$@" | grep -oP 'steamapps/common/[^/]+' | head -1 | xargs -I{} basename {} 2>/dev/null || echo "unknown"
+    fi
+}
+
+# Apply NVIDIA optimizations
+apply_nvidia_opts() {
+    local app_id="$1"
+
+    # Core NVIDIA settings
+    export __GL_THREADED_OPTIMIZATIONS="${__GL_THREADED_OPTIMIZATIONS:-1}"
+    export __GL_SHADER_DISK_CACHE="${__GL_SHADER_DISK_CACHE:-1}"
+    export __GL_SHADER_DISK_CACHE_SKIP_CLEANUP="${__GL_SHADER_DISK_CACHE_SKIP_CLEANUP:-1}"
+
+    # VRR/G-Sync
+    if [[ "${NVPROTON_VRR:-1}" == "1" ]]; then
+        export __GL_GSYNC_ALLOWED=1
+        export __GL_VRR_ALLOWED=1
+    fi
+
+    # Reflex (Low Latency)
+    if [[ "${NVPROTON_REFLEX:-1}" == "1" ]]; then
+        export __GL_REFLEX=1
+        export DXVK_NVAPI_ALLOW_REFLEX=1
+    fi
+
+    # Maximum pre-rendered frames (lower = less input lag)
+    export __GL_MaxFramesAllowed="${__GL_MaxFramesAllowed:-1}"
+
+    # DXVK optimizations
+    export DXVK_ASYNC="${DXVK_ASYNC:-1}"
+    export DXVK_STATE_CACHE="${DXVK_STATE_CACHE:-1}"
+
+    # vkd3d-proton optimizations
+    export VKD3D_FEATURE_LEVEL="${VKD3D_FEATURE_LEVEL:-12_1}"
+
+    # NVAPI for DLSS/Reflex
+    export DXVK_ENABLE_NVAPI="${DXVK_ENABLE_NVAPI:-1}"
+    export PROTON_ENABLE_NVAPI="${PROTON_ENABLE_NVAPI:-1}"
+
+    # Hide NVIDIA GPU info (some games detect and disable features)
+    # export DXVK_HIDE_NVIDIA_GPU=0
+
+    # Try to load game-specific profile via nvproton CLI
+    if command -v nvproton &>/dev/null; then
+        local profile_env
+        profile_env=$(nvproton profile env "$app_id" 2>/dev/null)
+        if [[ $? -eq 0 && -n "$profile_env" ]]; then
+            eval "$profile_env"
+        fi
+    fi
+}
+
+# Set up shader cache paths
+setup_shader_cache() {
+    local app_id="$1"
+
+    # DXVK state cache
+    local dxvk_cache="${XDG_CACHE_HOME:-$HOME/.cache}/nvproton/dxvk/$app_id"
+    mkdir -p "$dxvk_cache"
+    export DXVK_STATE_CACHE_PATH="$dxvk_cache"
+
+    # vkd3d-proton cache
+    local vkd3d_cache="${XDG_CACHE_HOME:-$HOME/.cache}/nvproton/vkd3d/$app_id"
+    mkdir -p "$vkd3d_cache"
+    export VKD3D_SHADER_CACHE_PATH="$vkd3d_cache"
+
+    # NVIDIA GL shader cache
+    local gl_cache="${XDG_CACHE_HOME:-$HOME/.cache}/nvproton/gl/$app_id"
+    mkdir -p "$gl_cache"
+    export __GL_SHADER_DISK_CACHE_PATH="$gl_cache"
+
+    # Mesa shader cache (for debugging/fallback)
+    export MESA_SHADER_CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/nvproton/mesa"
+    mkdir -p "$MESA_SHADER_CACHE_DIR"
+}
+
+# Main entry point
+main() {
+    local app_id
+    app_id=$(get_app_id "$@")
+
+    # Find upstream Proton
+    local upstream
+    upstream=$(find_upstream_proton)
+    if [[ -z "$upstream" ]]; then
+        echo "NVProton: ERROR - No upstream Proton found!" >&2
+        echo "NVProton: Set NVPROTON_UPSTREAM_PROTON or install GE-Proton" >&2
+        exit 1
+    fi
+
+    # Log startup
+    if [[ "${NVPROTON_DEBUG:-0}" == "1" ]]; then
+        echo "NVProton v$NVPROTON_VERSION" >&2
+        echo "  App ID: $app_id" >&2
+        echo "  Upstream: $upstream" >&2
+    fi
+
+    # Apply optimizations
+    apply_nvidia_opts "$app_id"
+    setup_shader_cache "$app_id"
+
+    # Export for child processes
+    export NVPROTON_ACTIVE=1
+    export NVPROTON_APP_ID="$app_id"
+
+    # Execute upstream Proton
+    exec "$upstream/proton" "$@"
+}
+
+# Handle Proton verbs
+case "${1:-}" in
+    run|runinprefix|waitforexitandrun)
+        main "$@"
+        ;;
+    getcompatpath|getnativepath)
+        # These don't need our wrapper, pass through
+        upstream=$(find_upstream_proton)
+        exec "$upstream/proton" "$@"
+        ;;
+    *)
+        main "$@"
+        ;;
+esac

@@ -27,6 +27,12 @@ pub enum Commands {
     Detect(DetectArgs),
     /// Manage game profiles
     Profile(ProfileArgs),
+    /// Install and manage built-in presets (steam-deck, competitive, etc.)
+    Preset(PresetArgs),
+    /// MangoHud configuration generation
+    Mangohud(MangohudArgs),
+    /// Feral GameMode integration
+    Gamemode(GamemodeArgs),
     /// Manage nvproton configuration
     Config(ConfigArgs),
 }
@@ -394,4 +400,94 @@ pub enum ShortcutCommand {
         #[arg(long)]
         profile: Option<String>,
     },
+}
+
+// ============================================================================
+// Preset Commands
+// ============================================================================
+
+#[derive(Debug, Args)]
+pub struct PresetArgs {
+    #[command(subcommand)]
+    pub command: PresetCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum PresetCommand {
+    /// List available presets
+    List,
+    /// Show details for a preset
+    Show {
+        /// Preset name (steam-deck, competitive, balanced, quality, battery)
+        name: String,
+    },
+    /// Install all presets as profiles
+    Install {
+        /// Overwrite existing profiles
+        #[arg(long)]
+        force: bool,
+    },
+    /// Auto-detect and recommend a preset for this system
+    Recommend,
+}
+
+// ============================================================================
+// MangoHud Commands
+// ============================================================================
+
+#[derive(Debug, Args)]
+pub struct MangohudArgs {
+    #[command(subcommand)]
+    pub command: MangohudCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum MangohudCommand {
+    /// Check MangoHud installation status
+    Status,
+    /// Generate MangoHud config from preset
+    Generate {
+        /// Preset (minimal, compact, standard, full, steam-deck, competitive, debug)
+        #[arg(default_value = "standard")]
+        preset: String,
+        /// Output path (default: ~/.config/MangoHud/MangoHud.conf)
+        #[arg(long)]
+        output: Option<String>,
+        /// Game name for per-game config
+        #[arg(long)]
+        game: Option<String>,
+    },
+    /// Show current MangoHud environment variables
+    Env {
+        /// Preset to use
+        #[arg(default_value = "standard")]
+        preset: String,
+    },
+}
+
+// ============================================================================
+// GameMode Commands
+// ============================================================================
+
+#[derive(Debug, Args)]
+pub struct GamemodeArgs {
+    #[command(subcommand)]
+    pub command: GamemodeCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum GamemodeCommand {
+    /// Check GameMode installation and daemon status
+    Status,
+    /// Generate GameMode config
+    Generate {
+        /// Config type (default, high-performance, power-save, competitive)
+        #[arg(default_value = "default")]
+        config_type: String,
+        /// Output path (default: ~/.config/gamemode/gamemode.ini)
+        #[arg(long)]
+        output: Option<String>,
+    },
+    /// Show launch command prefix for GameMode
+    Prefix,
 }
