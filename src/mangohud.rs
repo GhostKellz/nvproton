@@ -11,6 +11,7 @@ use std::path::PathBuf;
 
 /// MangoHud position on screen
 #[derive(Debug, Clone, Copy, Default)]
+#[allow(dead_code)] // Library API for config builders
 pub enum Position {
     #[default]
     TopLeft,
@@ -22,6 +23,7 @@ pub enum Position {
 }
 
 impl Position {
+    #[allow(dead_code)] // Library API
     pub fn to_config(&self) -> &'static str {
         match self {
             Self::TopLeft => "top-left",
@@ -54,6 +56,7 @@ pub enum MangoHudPreset {
 }
 
 impl MangoHudPreset {
+    #[allow(dead_code)] // Library API
     pub fn name(&self) -> &'static str {
         match self {
             Self::Minimal => "minimal",
@@ -181,22 +184,27 @@ impl MangoHudConfig {
         self
     }
 
+    // Builder methods below are part of the library API for programmatic config generation
+    #[allow(dead_code)]
     /// Set position
     pub fn position(&mut self, pos: Position) -> &mut Self {
         self.set("position", pos.to_config())
     }
 
+    #[allow(dead_code)]
     /// Enable FPS counter
     pub fn fps(&mut self) -> &mut Self {
         self.set("fps", "")
     }
 
+    #[allow(dead_code)]
     /// Enable frametime graph
     pub fn frametime(&mut self) -> &mut Self {
         self.set("frametime", "");
         self.set("frame_timing", "")
     }
 
+    #[allow(dead_code)]
     /// Enable GPU stats
     pub fn gpu_stats(&mut self) -> &mut Self {
         self.set("gpu_stats", "");
@@ -204,43 +212,51 @@ impl MangoHudConfig {
         self.set("gpu_power", "")
     }
 
+    #[allow(dead_code)]
     /// Enable CPU stats
     pub fn cpu_stats(&mut self) -> &mut Self {
         self.set("cpu_stats", "");
         self.set("cpu_temp", "")
     }
 
+    #[allow(dead_code)]
     /// Enable battery stats (for portables)
     pub fn battery(&mut self) -> &mut Self {
         self.set("battery", "");
         self.set("battery_time", "")
     }
 
+    #[allow(dead_code)]
     /// Set font size
     pub fn font_size(&mut self, size: u32) -> &mut Self {
         self.set("font_size", &size.to_string())
     }
 
+    #[allow(dead_code)]
     /// Set background transparency
     pub fn background_alpha(&mut self, alpha: f32) -> &mut Self {
         self.set("background_alpha", &alpha.to_string())
     }
 
+    #[allow(dead_code)]
     /// Set FPS limit
     pub fn fps_limit(&mut self, limit: u32) -> &mut Self {
         self.set("fps_limit", &limit.to_string())
     }
 
+    #[allow(dead_code)]
     /// Set FPS limit method
     pub fn fps_limit_method(&mut self, method: &str) -> &mut Self {
         self.set("fps_limit_method", method)
     }
 
+    #[allow(dead_code)]
     /// Enable toggle key
     pub fn toggle_fps_limit(&mut self, key: &str) -> &mut Self {
         self.set("toggle_fps_limit", key)
     }
 
+    #[allow(dead_code)]
     /// Enable logging to file
     pub fn log_to_file(&mut self) -> &mut Self {
         self.set("output_folder", "/tmp/mangohud_logs");

@@ -95,6 +95,7 @@ impl PresetType {
     }
 
     /// Check if preset requires specific GPU generation
+    #[allow(dead_code)] // Library API for GPU compatibility checks
     pub fn required_gpu(&self) -> Option<&'static str> {
         match self {
             Self::DlssQuality | Self::DlssPerformance => Some("RTX 20+"),

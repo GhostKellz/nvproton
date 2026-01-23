@@ -7,9 +7,10 @@ use anyhow::{Context, Result};
 
 use crate::cli::{PrepareArgs, RunArgs};
 use crate::config::{ConfigManager, NvConfig};
+use crate::detection::proton_nv::{ProtonNvDetector, ProtonNvEnv, ProtonNvInstallation};
 use crate::detection::{DetectedGame, GameDatabase, GameSource};
 use crate::ffi;
-use crate::profile::ProfileManager;
+use crate::profile::{ProfileManager, ProfilePersistence};
 
 /// Runtime context for game launching
 pub struct RunContext<'a> {
@@ -18,18 +19,42 @@ pub struct RunContext<'a> {
     #[allow(dead_code)]
     pub manager: &'a ConfigManager,
     pub profile_manager: ProfileManager,
+    pub profile_persistence: ProfilePersistence,
     pub game_db: GameDatabase,
+    pub proton_nv: Option<ProtonNvInstallation>,
 }
 
 impl<'a> RunContext<'a> {
     pub fn new(config: &'a NvConfig, manager: &'a ConfigManager) -> Result<Self> {
         let profile_manager = ProfileManager::new(manager.paths().profiles_dir.clone());
+        let db_path = manager.paths().user_config_dir.join("profiles.db");
+        let profile_persistence = ProfilePersistence::open(&db_path)
+            .context("failed to open profile persistence database")?;
         let game_db = GameDatabase::load_or_default(manager.paths())?;
+
+        // Detect Proton-NV installation
+        let proton_nv = {
+            let mut detector = ProtonNvDetector::new();
+            match detector.scan() {
+                Ok(_) => detector.get_best().cloned(),
+                Err(e) => {
+                    log::debug!("Proton-NV detection failed: {}", e);
+                    None
+                }
+            }
+        };
+
+        if let Some(ref pnv) = proton_nv {
+            log::info!("Proton-NV detected: {} at {:?}", pnv.version, pnv.path);
+        }
+
         Ok(Self {
             config,
             manager,
             profile_manager,
+            profile_persistence,
             game_db,
+            proton_nv,
         })
     }
 
@@ -66,8 +91,25 @@ pub fn handle_run(args: RunArgs, manager: &ConfigManager, config: &mut NvConfig)
     // Build environment variables
     let mut env_vars: HashMap<String, String> = HashMap::new();
 
-    // Apply profile settings if specified
-    if let Some(profile_name) = &args.profile {
+    // Apply Proton-NV optimizations if available
+    if let Some(ref proton_nv) = ctx.proton_nv {
+        println!("  Proton-NV: {} detected", proton_nv.version);
+        let pnv_env = ProtonNvEnv::from_installation(proton_nv);
+        for (key, value) in pnv_env.vars() {
+            env_vars.insert(key.clone(), value.clone());
+        }
+    }
+
+    // Determine which profile to use: command-line arg takes precedence over persisted binding
+    let profile_name = if let Some(name) = &args.profile {
+        Some(name.clone())
+    } else {
+        // Check for persisted profile binding
+        ctx.profile_persistence.get_binding(&game.id).ok().flatten()
+    };
+
+    // Apply profile settings
+    if let Some(profile_name) = &profile_name {
         let resolved = ctx.profile_manager.resolve(profile_name)?;
         println!("  Profile: {}", profile_name);
         apply_profile_to_env(&resolved.settings, &mut env_vars);
@@ -165,13 +207,29 @@ pub fn handle_prepare(
 
     println!("Preparing: {} ({})", game.name, game.id);
 
+    // Report Proton-NV status
+    if let Some(ref proton_nv) = ctx.proton_nv {
+        println!("  Proton-NV: {} (will be used at launch)", proton_nv.version);
+        if let Some(ref info) = proton_nv.version_info {
+            if let Some(ref driver) = info.nvidia_driver_min {
+                println!("    Requires: NVIDIA driver {}", driver);
+            }
+            if let Some(ref gpu) = info.target_gpu {
+                println!("    Target: {}", gpu);
+            }
+        }
+    } else {
+        println!("  Proton-NV: not detected (using system Proton)");
+    }
+
     // Apply profile if specified
     if let Some(profile_name) = &args.profile {
-        let resolved = ctx.profile_manager.resolve(profile_name)?;
-        println!("  Profile: {} (will be applied at launch)", profile_name);
-        // Store profile association for this game
-        // TODO: Persist game->profile mapping
-        let _ = resolved;
+        // Verify profile exists by resolving it
+        let _resolved = ctx.profile_manager.resolve(profile_name)?;
+        // Persist game->profile binding
+        ctx.profile_persistence.bind(&game.id, profile_name)
+            .with_context(|| format!("failed to bind profile '{}' to game '{}'", profile_name, game.id))?;
+        println!("  Profile: {} (bound to game, will be applied at launch)", profile_name);
     }
 
     // Shader pre-warming

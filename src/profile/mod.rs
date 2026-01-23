@@ -1,5 +1,6 @@
 mod manager;
 mod model;
+mod persistence;
 
 use anyhow::{Context, Result};
 use serde_yaml::{Mapping, Value};
@@ -13,6 +14,8 @@ use crate::config::{ConfigManager, NvConfig};
 
 pub use manager::ProfileManager;
 pub use model::ProfileDocument;
+#[allow(unused_imports)] // Library API for game-profile bindings
+pub use persistence::{ProfileBinding, ProfilePersistence};
 
 pub fn handle_profile(
     args: ProfileArgs,

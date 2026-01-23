@@ -2,6 +2,7 @@ mod database;
 pub mod fingerprint;
 pub mod heroic;
 pub mod lutris;
+pub mod proton_nv;
 pub mod steam;
 
 use anyhow::Result;

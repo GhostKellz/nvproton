@@ -11,7 +11,6 @@
 //! - Custom scripts execution
 
 use anyhow::{Context, Result};
-use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
@@ -306,6 +305,7 @@ pub fn is_installed() -> bool {
 }
 
 /// Check if GameMode daemon is running
+#[allow(dead_code)] // Library API for game launchers
 pub fn is_running() -> bool {
     Command::new("gamemoded")
         .arg("-s")
@@ -331,6 +331,7 @@ pub fn config_path() -> Option<PathBuf> {
 }
 
 /// Generate environment variables for enabling GameMode
+#[allow(dead_code)] // Library API for game launchers
 pub fn env_vars() -> Vec<(String, String)> {
     vec![("GAMEMODERUNEXEC".to_string(), "gamemoderun".to_string())]
 }
@@ -341,6 +342,7 @@ pub fn launch_prefix() -> &'static str {
 }
 
 /// Request game mode for the current process (returns registration ID)
+#[allow(dead_code)] // Library API for game launchers
 pub fn request_start() -> Result<()> {
     let status = Command::new("gamemoded")
         .arg("-r")
@@ -354,6 +356,7 @@ pub fn request_start() -> Result<()> {
 }
 
 /// End game mode for the current process
+#[allow(dead_code)] // Library API for game launchers
 pub fn request_end() -> Result<()> {
     let status = Command::new("gamemoded")
         .arg("-u")
