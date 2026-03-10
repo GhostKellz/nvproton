@@ -18,6 +18,8 @@ pub struct NvConfig {
     pub detectors: DetectorConfig,
     #[serde(default)]
     pub profile: ProfileConfig,
+    #[serde(default)]
+    pub vkd3d: Vkd3dConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,6 +58,84 @@ pub struct DetectorConfig {
 pub struct ProfileConfig {
     #[serde(default)]
     pub default_profile: Option<String>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_feature_level() -> String {
+    "12_2".to_string()
+}
+
+/// vkd3d-proton configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Vkd3dConfig {
+    /// Default descriptor heap mode (auto|on|off)
+    #[serde(default)]
+    pub descriptor_heap: String,
+
+    /// Additional VKD3D_CONFIG flags (comma-separated)
+    #[serde(default)]
+    pub config_flags: Vec<String>,
+
+    /// DX12 feature level (12_0, 12_1, 12_2)
+    #[serde(default = "default_feature_level")]
+    pub feature_level: String,
+
+    /// Warn if running beta driver
+    #[serde(default = "default_true")]
+    pub warn_beta_driver: bool,
+
+    /// Auto-enable descriptor_heap on 595+ drivers
+    #[serde(default = "default_true")]
+    pub auto_enable_595: bool,
+
+    /// Prefer extended_sparse_address_space when available (595+ heap fix)
+    #[serde(default = "default_true")]
+    pub use_heap_fix: bool,
+}
+
+impl Default for Vkd3dConfig {
+    fn default() -> Self {
+        Self {
+            descriptor_heap: "auto".to_string(),
+            config_flags: Vec::new(),
+            feature_level: "12_2".to_string(),
+            warn_beta_driver: true,
+            auto_enable_595: true,
+            use_heap_fix: true,
+        }
+    }
+}
+
+impl Vkd3dConfig {
+    /// Build VKD3D_CONFIG environment variable value
+    pub fn build_config_string(&self, has_descriptor_heap: bool, has_heap_fix: bool) -> String {
+        let mut flags = self.config_flags.clone();
+
+        // Add descriptor_heap if enabled
+        match self.descriptor_heap.as_str() {
+            "on" | "true" | "enabled" => {
+                if !flags.contains(&"descriptor_heap".to_string()) {
+                    flags.push("descriptor_heap".to_string());
+                }
+            }
+            "auto" => {
+                if has_descriptor_heap && !flags.contains(&"descriptor_heap".to_string()) {
+                    flags.push("descriptor_heap".to_string());
+                }
+            }
+            _ => {}
+        }
+
+        // Add heap-related optimizations if heap fix is available
+        if self.use_heap_fix && has_heap_fix {
+            // Future: add any heap-fix-specific flags here when vkd3d-proton supports them
+        }
+
+        flags.join(",")
+    }
 }
 
 #[derive(Debug, Clone)]

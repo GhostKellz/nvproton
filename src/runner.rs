@@ -5,10 +5,10 @@ use std::process::Command;
 
 use anyhow::{Context, Result};
 
-use crate::cli::{PrepareArgs, RunArgs};
+use crate::cli::{DescriptorHeapMode, PrepareArgs, RunArgs};
 use crate::config::{ConfigManager, NvConfig};
 use crate::detection::proton_nv::{ProtonNvDetector, ProtonNvEnv, ProtonNvInstallation};
-use crate::detection::{DetectedGame, GameDatabase, GameSource};
+use crate::detection::{DetectedGame, GameDatabase, GameSource, VulkanCapabilities};
 use crate::ffi;
 use crate::profile::{ProfileManager, ProfilePersistence};
 
@@ -22,6 +22,7 @@ pub struct RunContext<'a> {
     pub profile_persistence: ProfilePersistence,
     pub game_db: GameDatabase,
     pub proton_nv: Option<ProtonNvInstallation>,
+    pub vulkan_caps: Option<VulkanCapabilities>,
 }
 
 impl<'a> RunContext<'a> {
@@ -48,6 +49,25 @@ impl<'a> RunContext<'a> {
             log::info!("Proton-NV detected: {} at {:?}", pnv.version, pnv.path);
         }
 
+        // Detect Vulkan capabilities (for descriptor_heap support)
+        let vulkan_caps = match VulkanCapabilities::detect() {
+            Ok(caps) => {
+                log::info!(
+                    "Vulkan: {} (driver {})",
+                    caps.gpu_name,
+                    caps.driver_version
+                );
+                if caps.descriptor_heap {
+                    log::info!("VK_EXT_descriptor_heap: supported");
+                }
+                Some(caps)
+            }
+            Err(e) => {
+                log::debug!("Vulkan capability detection failed: {}", e);
+                None
+            }
+        };
+
         Ok(Self {
             config,
             manager,
@@ -55,6 +75,7 @@ impl<'a> RunContext<'a> {
             profile_persistence,
             game_db,
             proton_nv,
+            vulkan_caps,
         })
     }
 
@@ -118,14 +139,28 @@ pub fn handle_run(args: RunArgs, manager: &ConfigManager, config: &mut NvConfig)
     // NVIDIA-specific optimizations via FFI
     // Configure Reflex via nvlatency library
     if args.reflex {
+        // Check for Reflex 2.0 support (VK_NV_low_latency2 on 595+)
+        let has_reflex2 = ctx.vulkan_caps.as_ref().is_some_and(|c| c.supports_reflex2());
+
         // Set environment variables as fallback for DXVK/Wine
         env_vars.insert("__GL_REFLEX".into(), "1".into());
         env_vars.insert("DXVK_NVAPI_ALLOW_REFLEX".into(), "1".into());
 
+        // Enable Reflex 2.0 features if available
+        if has_reflex2 {
+            env_vars.insert("__GL_REFLEX_MODE".into(), "2".into()); // Reflex 2.0 mode
+        }
+
         // Also configure via FFI for native applications
         if let Err(e) = configure_reflex(true) {
             log::warn!("Reflex FFI configuration failed: {}", e);
-            println!("  Reflex: enabled (env vars only)");
+            if has_reflex2 {
+                println!("  Reflex 2.0: enabled (env vars only)");
+            } else {
+                println!("  Reflex: enabled (env vars only)");
+            }
+        } else if has_reflex2 {
+            println!("  Reflex 2.0: enabled via nvlatency");
         }
     }
 
@@ -148,6 +183,61 @@ pub fn handle_run(args: RunArgs, manager: &ConfigManager, config: &mut NvConfig)
             }
             if args.fps > 0 {
                 println!("  FPS Limit: {} (env vars only)", args.fps);
+            }
+        }
+    }
+
+    // Configure VK_EXT_descriptor_heap for DX12 games
+    let has_descriptor_heap = ctx
+        .vulkan_caps
+        .as_ref()
+        .is_some_and(|c| c.supports_descriptor_heap());
+    let has_heap_fix = ctx
+        .vulkan_caps
+        .as_ref()
+        .is_some_and(|c| c.supports_dx12_heap_fix());
+    let is_595 = ctx.vulkan_caps.as_ref().is_some_and(|c| c.is_595_series());
+
+    let use_descriptor_heap = match args.descriptor_heap {
+        DescriptorHeapMode::On => true,
+        DescriptorHeapMode::Off => false,
+        DescriptorHeapMode::Auto => {
+            // Auto-enable on 595+ if config allows, or if extension is available
+            (config.vkd3d.auto_enable_595 && is_595) || has_descriptor_heap
+        }
+    };
+
+    if use_descriptor_heap {
+        // Build VKD3D_CONFIG with all relevant flags
+        let vkd3d_config =
+            config
+                .vkd3d
+                .build_config_string(has_descriptor_heap, has_heap_fix);
+        if !vkd3d_config.is_empty() {
+            env_vars.insert("VKD3D_CONFIG".into(), vkd3d_config);
+        }
+        env_vars.insert("VKD3D_FEATURE_LEVEL".into(), config.vkd3d.feature_level.clone());
+
+        if has_heap_fix {
+            println!("  Descriptor Heap: enabled (DX12 optimization + 595 heap fix)");
+        } else {
+            println!("  Descriptor Heap: enabled (DX12 optimization)");
+        }
+    }
+
+    // Warn about beta driver if configured (but 595 is recommended so note that)
+    if let Some(ref caps) = ctx.vulkan_caps {
+        if caps.is_beta_driver() && config.vkd3d.warn_beta_driver {
+            if caps.is_595_series() {
+                eprintln!(
+                    "  Note: 595 beta driver {} - recommended for DX12 games (heap fixes included)",
+                    caps.driver_version
+                );
+            } else {
+                eprintln!(
+                    "  Warning: Beta driver {} detected. Consider updating to 595.x for heap fixes.",
+                    caps.driver_version
+                );
             }
         }
     }
@@ -579,6 +669,43 @@ fn apply_profile_to_env(settings: &serde_yaml::Value, env_vars: &mut HashMap<Str
                         _ => {}
                     }
                 }
+            }
+        }
+
+        // Handle vkd3d section
+        if let Some(serde_yaml::Value::Mapping(vkd3d_map)) =
+            map.get(serde_yaml::Value::String("vkd3d".into()))
+        {
+            // Handle descriptor_heap setting
+            if let Some(serde_yaml::Value::String(mode)) =
+                vkd3d_map.get(&serde_yaml::Value::String("descriptor_heap".into()))
+            {
+                match mode.as_str() {
+                    "on" | "enabled" | "true" => {
+                        env_vars.insert("VKD3D_CONFIG".into(), "descriptor_heap".into());
+                        env_vars.insert("VKD3D_FEATURE_LEVEL".into(), "12_2".into());
+                    }
+                    "off" | "disabled" | "false" => {
+                        // Remove if previously set
+                        env_vars.remove("VKD3D_CONFIG");
+                    }
+                    // "auto" - don't override, let runtime detection handle it
+                    _ => {}
+                }
+            }
+
+            // Handle config setting (VKD3D_CONFIG value)
+            if let Some(serde_yaml::Value::String(config_val)) =
+                vkd3d_map.get(&serde_yaml::Value::String("config".into()))
+            {
+                env_vars.insert("VKD3D_CONFIG".into(), config_val.clone());
+            }
+
+            // Handle feature_level setting
+            if let Some(serde_yaml::Value::String(level)) =
+                vkd3d_map.get(&serde_yaml::Value::String("feature_level".into()))
+            {
+                env_vars.insert("VKD3D_FEATURE_LEVEL".into(), level.clone());
             }
         }
     }

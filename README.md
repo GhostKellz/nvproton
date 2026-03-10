@@ -8,6 +8,8 @@
 [![Steam](https://img.shields.io/badge/Steam-000000?style=for-the-badge&logo=steam&logoColor=white)](https://store.steampowered.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](LICENSE)
 
+> **⚠️ Experimental Project** - This project is under active development and not fully tested. Use at your own risk.
+
 **NVIDIA-Optimized Proton Integration Layer for Linux Gaming**
 
 A comprehensive integration layer that bridges all nv* tools with Steam Proton/Wine, providing automatic game optimization, Reflex injection, shader management, and per-game configurations.
@@ -45,6 +47,27 @@ nvproton is the "glue" that connects all NVIDIA Linux gaming tools with Proton:
 
 ## Features
 
+### NVIDIA 595 Driver Support
+
+nvproton fully supports the 595 beta driver series with automatic detection of new Vulkan extensions:
+
+| Extension | Purpose | Driver |
+|-----------|---------|--------|
+| `VK_EXT_descriptor_heap` | DX12 descriptor optimization | 595+ |
+| `VK_NV_extended_sparse_address_space` | DX12 heap fix | 595+ |
+| `VK_NV_low_latency2` | Reflex 2.0 | 595+ |
+| `VK_EXT_present_timing` | Frame pacing | 595+ |
+
+```bash
+# Check your system's 595 readiness
+nvproton status --verbose
+
+# Output shows extension support:
+# DX12 Extensions (vkd3d-proton):
+#   VK_EXT_descriptor_heap: supported [DX12 FIX]
+#   VK_NV_extended_sparse_address_space: supported [DX12 FIX]
+```
+
 ### Automatic Game Detection
 
 nvproton maintains a database of games with optimal configurations:
@@ -62,12 +85,13 @@ nvproton games info "Cyberpunk 2077"
 
 ### Per-Game Optimization
 
-| Game | Reflex | Shader Prewarm | VRR | Special Config |
-|------|--------|----------------|-----|----------------|
-| Cyberpunk 2077 | Boost | Yes | 60Hz cap | RT optimizations |
-| Elden Ring | On | Yes | Auto | Anti-stutter patches |
-| CS2 | Ultra | N/A (native) | 240Hz+ | Competitive preset |
-| Apex Legends | Boost | Yes | Auto | EAC compatibility |
+| Game | API | Reflex | descriptor_heap | Special Config |
+|------|-----|--------|-----------------|----------------|
+| Cyberpunk 2077 | DX12 | Boost | Yes (595+) | RT optimizations |
+| Elden Ring | DX12 | On | Yes (595+) | Anti-stutter patches |
+| Black Myth: Wukong | DX12 | On | Yes (595+) | UE5 optimizations |
+| CS2 | Vulkan | Reflex 2.0 | N/A | Vulkan native |
+| Baldur's Gate 3 | Vulkan | On | N/A | Vulkan native |
 
 ## Usage
 
@@ -94,6 +118,11 @@ nvproton profile edit "Elden Ring"
 
 # Export profile for sharing
 nvproton profile export "Elden Ring" --output elden-ring.json
+
+# Check system status and driver readiness
+nvproton status
+nvproton status --verbose  # Include driver branch info
+nvproton status --check    # Exit 0 if DX12 ready, 1 otherwise
 ```
 
 ### Steam Integration
@@ -200,6 +229,16 @@ notes: |
 | `NVPROTON_PREWARM` | Shader pre-warming | `on`, `off` |
 | `NVPROTON_PROFILE` | Named profile | Profile name |
 | `NVPROTON_DEBUG` | Debug output | `0`, `1`, `2` |
+| `NVPROTON_LIB_PATH` | Custom path for nv* libraries | Path |
+
+### vkd3d-proton Variables (set automatically)
+
+| Variable | Description | When Set |
+|----------|-------------|----------|
+| `VKD3D_CONFIG` | vkd3d-proton config flags | DX12 games with 595+ |
+| `VKD3D_FEATURE_LEVEL` | DX12 feature level | DX12 games (default: 12_2) |
+| `__GL_REFLEX` | NVIDIA Reflex enable | When --reflex used |
+| `__GL_REFLEX_MODE` | Reflex 2.0 mode | 595+ with low_latency2 |
 
 ## Building
 
@@ -240,8 +279,10 @@ cp games/*.yaml ~/.config/nvproton/games/
 
 ## Requirements
 
-- NVIDIA GPU (GTX 900 series or newer)
-- NVIDIA driver 535+
+- NVIDIA GPU (Turing or newer recommended for full features)
+- NVIDIA driver 595+ (beta) recommended for DX12 optimizations
+  - 595.x adds `VK_EXT_descriptor_heap` and `VK_NV_extended_sparse_address_space`
+  - Older drivers (535+) work but lack DX12 heap fixes
 - Proton 8.0+ or Wine 8.0+
 - Rust 1.70+ (for building)
 - Steam, Heroic, or Lutris (for game detection)
