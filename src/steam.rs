@@ -362,14 +362,14 @@ fn handle_shortcut(
                         crate::profile::ProfileManager::new(manager.paths().profiles_dir.clone());
                     if let Ok(resolved) = profile_manager.resolve(&profile_name) {
                         // Extract env vars from profile
-                        if let serde_yaml::Value::Mapping(map) = &resolved.settings
-                            && let Some(serde_yaml::Value::Mapping(env)) =
-                                map.get(serde_yaml::Value::String("env".into()))
+                        if let serde_norway::Value::Mapping(map) = &resolved.settings
+                            && let Some(serde_norway::Value::Mapping(env)) =
+                                map.get(serde_norway::Value::String("env".into()))
                         {
                             for (k, v) in env {
                                 if let (
-                                    serde_yaml::Value::String(key),
-                                    serde_yaml::Value::String(val),
+                                    serde_norway::Value::String(key),
+                                    serde_norway::Value::String(val),
                                 ) = (k, v)
                                 {
                                     options.push(format!("{}={}", key, val));

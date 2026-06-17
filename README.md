@@ -284,7 +284,7 @@ cp games/*.yaml ~/.config/nvproton/games/
   - 595.x adds `VK_EXT_descriptor_heap` and `VK_NV_extended_sparse_address_space`
   - Older drivers (535+) work but lack DX12 heap fixes
 - Proton 8.0+ or Wine 8.0+
-- Rust 1.70+ (for building)
+- Rust 1.96 (2024 edition, for building)
 - Steam, Heroic, or Lutris (for game detection)
 
 ## Why Rust?
@@ -299,6 +299,11 @@ nvproton uses Rust because:
 
 MIT License - See [LICENSE](LICENSE)
 
+## Documentation
+
+Full documentation lives in [docs/](docs/README.md).
+
 ## Contributing
 
-See [TODO.md](TODO.md) for the development roadmap.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and guidelines, and
+[SECURITY.md](SECURITY.md) for reporting vulnerabilities.

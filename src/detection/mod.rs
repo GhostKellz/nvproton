@@ -4,6 +4,9 @@ pub mod heroic;
 pub mod lutris;
 pub mod proton_nv;
 pub mod steam;
+pub mod vulkan;
+
+pub use vulkan::VulkanCapabilities;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -130,7 +133,7 @@ fn output_games(games: &[DetectedGame], format: OutputFormat) {
             }
         }
         OutputFormat::Yaml => {
-            if let Ok(yaml) = serde_yaml::to_string(games) {
+            if let Ok(yaml) = serde_norway::to_string(games) {
                 println!("{}", yaml);
             }
         }

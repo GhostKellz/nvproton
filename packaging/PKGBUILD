@@ -1,0 +1,58 @@
+# Maintainer: Christopher Kelley <ghost@ghostkellz.sh>
+pkgname=nvproton-git
+_pkgname=nvproton
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="NVIDIA-optimized Proton integration layer for Linux gaming (Reflex, VRR, shader pre-warm)"
+arch=('x86_64')
+url="https://github.com/ghostkellz/nvproton"
+license=('MIT')
+depends=('glibc')
+makedepends=('rust' 'cargo' 'git')
+optdepends=(
+    'steam: Steam game detection'
+    'lutris: Lutris game detection'
+    'heroic-games-launcher: Epic/GOG game detection'
+    'proton-nv: NVIDIA-optimized Proton runtime'
+    'nvshader: shader cache pre-warming'
+    'nvlatency: Reflex latency control'
+    'nvsync: VRR/G-Sync control'
+)
+provides=("$_pkgname")
+conflicts=("$_pkgname")
+source=("$_pkgname::git+https://github.com/ghostkellz/nvproton.git")
+sha256sums=('SKIP')
+
+pkgver() {
+    cd "$_pkgname"
+    # Tagged: v1.2.3-4-gabcdef -> 1.2.3.r4.gabcdef. Untagged: r<count>.<sha>.
+    git describe --long --tags --abbrev=7 2>/dev/null \
+        | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g' \
+        || printf 'r%s.%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
+}
+
+prepare() {
+    cd "$_pkgname"
+    export RUSTUP_TOOLCHAIN=stable
+    cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+    cd "$_pkgname"
+    export RUSTUP_TOOLCHAIN=stable
+    export CARGO_TARGET_DIR=target
+    cargo build --frozen --release
+}
+
+check() {
+    cd "$_pkgname"
+    export RUSTUP_TOOLCHAIN=stable
+    cargo test --frozen
+}
+
+package() {
+    cd "$_pkgname"
+    install -Dm755 "target/release/$_pkgname" "$pkgdir/usr/bin/$_pkgname"
+    install -Dm644 README.md "$pkgdir/usr/share/doc/$_pkgname/README.md"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$_pkgname/LICENSE"
+}

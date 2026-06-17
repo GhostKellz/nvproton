@@ -3,7 +3,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use serde_yaml::{Mapping, Value};
+use serde_norway::{Mapping, Value};
 
 use super::model::{ProfileDocument, ResolvedProfile};
 
@@ -41,7 +41,7 @@ impl ProfileManager {
         let contents = fs::read_to_string(&path)
             .with_context(|| format!("failed to read profile at {:?}", path))?;
         let document: ProfileDocument =
-            serde_yaml::from_str(&contents).context("failed to parse profile document")?;
+            serde_norway::from_str(&contents).context("failed to parse profile document")?;
         Ok(document)
     }
 
@@ -50,7 +50,7 @@ impl ProfileManager {
             .with_context(|| format!("failed to create profiles directory at {:?}", self.root))?;
         let path = self.path_for(&document.name);
         let encoded =
-            serde_yaml::to_string(document).context("failed to encode profile document")?;
+            serde_norway::to_string(document).context("failed to encode profile document")?;
         let mut file = fs::File::create(&path)
             .with_context(|| format!("failed to open profile file at {:?}", path))?;
         file.write_all(encoded.as_bytes())

@@ -152,9 +152,9 @@ impl ProtonNvDetector {
             l.strip_prefix("NVIDIA Open ")
                 .map(|s| s.trim_end_matches(" optimized").to_string())
         });
-        let target_gpu = lines.get(2).and_then(|l| {
-            l.strip_prefix("Target: ").map(|s| s.to_string())
-        });
+        let target_gpu = lines
+            .get(2)
+            .and_then(|l| l.strip_prefix("Target: ").map(|s| s.to_string()));
 
         Some(ProtonNvVersionInfo {
             full_version,
@@ -255,13 +255,13 @@ pub fn is_proton_nv_installed() -> bool {
     let home = dirs::home_dir().unwrap_or_default();
     let steam_tools = home.join(".local/share/Steam/compatibilitytools.d");
 
-    if steam_tools.exists() {
-        if let Ok(entries) = fs::read_dir(&steam_tools) {
-            for entry in entries.flatten() {
-                let name = entry.file_name().to_string_lossy().to_lowercase();
-                if name.contains("proton-nv") {
-                    return true;
-                }
+    if steam_tools.exists()
+        && let Ok(entries) = fs::read_dir(&steam_tools)
+    {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_lowercase();
+            if name.contains("proton-nv") {
+                return true;
             }
         }
     }

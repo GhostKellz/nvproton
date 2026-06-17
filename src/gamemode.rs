@@ -17,23 +17,12 @@ use std::path::PathBuf;
 use std::process::Command;
 
 /// GameMode configuration
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct GameModeConfig {
     pub general: GeneralConfig,
     pub gpu: GpuConfig,
     pub cpu: CpuConfig,
     pub custom: CustomConfig,
-}
-
-impl Default for GameModeConfig {
-    fn default() -> Self {
-        Self {
-            general: GeneralConfig::default(),
-            gpu: GpuConfig::default(),
-            cpu: CpuConfig::default(),
-            custom: CustomConfig::default(),
-        }
-    }
 }
 
 /// General GameMode settings
@@ -213,7 +202,11 @@ impl GameModeConfig {
         lines.push(format!("ioprio={}", self.general.ioprio));
         lines.push(format!(
             "softrealtime={}",
-            if self.general.softrealtime { "on" } else { "off" }
+            if self.general.softrealtime {
+                "on"
+            } else {
+                "off"
+            }
         ));
         lines.push(format!(
             "inhibit_screensaver={}",
@@ -233,7 +226,10 @@ impl GameModeConfig {
         ));
         lines.push(format!("gpu_device={}", self.gpu.gpu_device));
         lines.push(format!("nv_perf_level={}", self.gpu.nv_perf_level));
-        lines.push(format!("nv_powermizer_mode={}", self.gpu.nv_powermizer_mode));
+        lines.push(format!(
+            "nv_powermizer_mode={}",
+            self.gpu.nv_powermizer_mode
+        ));
         lines.push(format!(
             "amd_performance_level={}",
             self.gpu.amd_performance_level

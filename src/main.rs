@@ -1,7 +1,9 @@
+mod audio;
 mod cache;
 mod cli;
 mod config;
 mod detection;
+mod dx12_games;
 mod ffi;
 mod gamemode;
 mod games;
@@ -9,7 +11,9 @@ mod mangohud;
 mod presets;
 mod profile;
 mod runner;
+mod status;
 mod steam;
+mod streaming;
 
 use anyhow::Result;
 use clap::Parser;
@@ -27,6 +31,12 @@ fn main() -> Result<()> {
         }
         cli::Commands::Prepare(args) => {
             runner::handle_prepare(args, &config_manager, &mut config)?;
+        }
+        cli::Commands::Record(args) => {
+            runner::handle_record(args, &config_manager, &mut config)?;
+        }
+        cli::Commands::Stream(args) => {
+            runner::handle_stream(args, &config_manager, &mut config)?;
         }
         cli::Commands::Games(args) => {
             games::handle_games(args, &config_manager, &mut config)?;
@@ -52,6 +62,9 @@ fn main() -> Result<()> {
         cli::Commands::Config(args) => {
             config::handle_config(args.command, &config_manager, &mut config)?;
         }
+        cli::Commands::Status(args) => {
+            status::handle_status(args, &config_manager)?;
+        }
     }
 
     config_manager.save(&config)?;
@@ -72,7 +85,7 @@ fn handle_preset(args: cli::PresetArgs, manager: &config::ConfigManager) -> Resu
             let preset = presets::PresetType::from_name(&name)
                 .ok_or_else(|| anyhow::anyhow!("unknown preset: {}", name))?;
             let doc = presets::generate_preset(preset);
-            println!("{}", serde_yaml::to_string(&doc)?);
+            println!("{}", serde_norway::to_string(&doc)?);
         }
         cli::PresetCommand::Install { force } => {
             let installed = presets::install_presets(&profile_manager, force)?;
@@ -85,7 +98,10 @@ fn handle_preset(args: cli::PresetArgs, manager: &config::ConfigManager) -> Resu
         cli::PresetCommand::Recommend => {
             let preset = presets::recommended_preset();
             let is_deck = presets::is_steam_deck();
-            println!("Detected: {}", if is_deck { "Steam Deck" } else { "Desktop" });
+            println!(
+                "Detected: {}",
+                if is_deck { "Steam Deck" } else { "Desktop" }
+            );
             println!("Recommended preset: {}", preset.name());
             println!("Description: {}", preset.description());
         }
@@ -97,15 +113,24 @@ fn handle_mangohud(args: cli::MangohudArgs) -> Result<()> {
     match args.command {
         cli::MangohudCommand::Status => {
             let installed = mangohud::is_installed();
-            println!("MangoHud installed: {}", if installed { "Yes" } else { "No" });
+            println!(
+                "MangoHud installed: {}",
+                if installed { "Yes" } else { "No" }
+            );
             if let Some(path) = mangohud::global_config_path() {
                 let exists = path.exists();
-                println!("Global config: {} ({})",
+                println!(
+                    "Global config: {} ({})",
                     path.display(),
-                    if exists { "exists" } else { "not found" });
+                    if exists { "exists" } else { "not found" }
+                );
             }
         }
-        cli::MangohudCommand::Generate { preset, output, game } => {
+        cli::MangohudCommand::Generate {
+            preset,
+            output,
+            game,
+        } => {
             let mh_preset = match preset.to_lowercase().as_str() {
                 "minimal" => mangohud::MangoHudPreset::Minimal,
                 "compact" => mangohud::MangoHudPreset::Compact,
@@ -136,7 +161,7 @@ fn handle_mangohud(args: cli::MangohudArgs) -> Result<()> {
             let mh_preset = match preset.to_lowercase().as_str() {
                 "minimal" => mangohud::MangoHudPreset::Minimal,
                 "compact" => mangohud::MangoHudPreset::Compact,
-                "standard" | _ => mangohud::MangoHudPreset::Standard,
+                _ => mangohud::MangoHudPreset::Standard,
             };
             let config = mangohud::MangoHudConfig::from_preset(mh_preset);
             for (key, value) in mangohud::env_vars(&config) {
@@ -151,12 +176,18 @@ fn handle_gamemode(args: cli::GamemodeArgs) -> Result<()> {
     match args.command {
         cli::GamemodeCommand::Status => {
             let installed = gamemode::is_installed();
-            println!("GameMode installed: {}", if installed { "Yes" } else { "No" });
+            println!(
+                "GameMode installed: {}",
+                if installed { "Yes" } else { "No" }
+            );
 
             if installed {
                 match gamemode::status() {
                     Ok(status) => {
-                        println!("Daemon running: {}", if status.running { "Yes" } else { "No" });
+                        println!(
+                            "Daemon running: {}",
+                            if status.running { "Yes" } else { "No" }
+                        );
                         if status.running {
                             println!("Active clients: {}", status.client_count);
                         }
@@ -169,12 +200,17 @@ fn handle_gamemode(args: cli::GamemodeArgs) -> Result<()> {
 
             if let Some(path) = gamemode::config_path() {
                 let exists = path.exists();
-                println!("Config: {} ({})",
+                println!(
+                    "Config: {} ({})",
                     path.display(),
-                    if exists { "exists" } else { "not found" });
+                    if exists { "exists" } else { "not found" }
+                );
             }
         }
-        cli::GamemodeCommand::Generate { config_type, output } => {
+        cli::GamemodeCommand::Generate {
+            config_type,
+            output,
+        } => {
             let config = match config_type.to_lowercase().as_str() {
                 "default" => gamemode::GameModeConfig::default(),
                 "high-performance" | "performance" => gamemode::GameModeConfig::high_performance(),

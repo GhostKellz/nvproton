@@ -7,7 +7,7 @@
 //! - Quality: Maximum visual quality
 
 use anyhow::Result;
-use serde_yaml::{Mapping, Value};
+use serde_norway::{Mapping, Value};
 
 use crate::profile::{ProfileDocument, ProfileManager};
 
@@ -183,6 +183,11 @@ pub fn generate_preset(preset: PresetType) -> ProfileDocument {
             nvidia.insert(val("prerendered_frames"), val("1"));
             settings.insert(val("nvidia"), Value::Mapping(nvidia));
 
+            // vkd3d-proton DX12 optimizations
+            let mut vkd3d = Mapping::new();
+            vkd3d.insert(val("descriptor_heap"), val("auto"));
+            settings.insert(val("vkd3d"), Value::Mapping(vkd3d));
+
             // Gamemode for CPU governor
             let mut gamemode = Mapping::new();
             gamemode.insert(val("enabled"), val("true"));
@@ -217,6 +222,11 @@ pub fn generate_preset(preset: PresetType) -> ProfileDocument {
             nvidia.insert(val("low_latency"), val("on"));
             nvidia.insert(val("prerendered_frames"), val("2"));
             settings.insert(val("nvidia"), Value::Mapping(nvidia));
+
+            // vkd3d-proton DX12 optimizations
+            let mut vkd3d = Mapping::new();
+            vkd3d.insert(val("descriptor_heap"), val("auto"));
+            settings.insert(val("vkd3d"), Value::Mapping(vkd3d));
 
             // Gamemode enabled
             let mut gamemode = Mapping::new();
@@ -263,6 +273,11 @@ pub fn generate_preset(preset: PresetType) -> ProfileDocument {
             nvidia.insert(val("prerendered_frames"), val("3"));
             nvidia.insert(val("anisotropic_filtering"), val("16"));
             settings.insert(val("nvidia"), Value::Mapping(nvidia));
+
+            // vkd3d-proton DX12 optimizations
+            let mut vkd3d = Mapping::new();
+            vkd3d.insert(val("descriptor_heap"), val("auto"));
+            settings.insert(val("vkd3d"), Value::Mapping(vkd3d));
 
             // MangoHud detailed
             let mut mangohud = Mapping::new();
@@ -315,7 +330,6 @@ pub fn generate_preset(preset: PresetType) -> ProfileDocument {
         }
 
         // ===== DLSS 4.5 Presets =====
-
         PresetType::DlssQuality => {
             // DLSS Quality - best image quality for RTX 20+
             let mut dlss = Mapping::new();
@@ -560,9 +574,15 @@ mod tests {
 
     #[test]
     fn test_from_name() {
-        assert_eq!(PresetType::from_name("steam-deck"), Some(PresetType::SteamDeck));
+        assert_eq!(
+            PresetType::from_name("steam-deck"),
+            Some(PresetType::SteamDeck)
+        );
         assert_eq!(PresetType::from_name("deck"), Some(PresetType::SteamDeck));
-        assert_eq!(PresetType::from_name("competitive"), Some(PresetType::Competitive));
+        assert_eq!(
+            PresetType::from_name("competitive"),
+            Some(PresetType::Competitive)
+        );
         assert_eq!(PresetType::from_name("unknown"), None);
     }
 
@@ -570,7 +590,7 @@ mod tests {
     fn test_generate_steam_deck_preset() {
         let doc = generate_preset(PresetType::SteamDeck);
         assert_eq!(doc.name, "steam-deck");
-        assert!(doc.settings.contains_key(&val("display")));
-        assert!(doc.settings.contains_key(&val("gamescope")));
+        assert!(doc.settings.contains_key(val("display")));
+        assert!(doc.settings.contains_key(val("gamescope")));
     }
 }

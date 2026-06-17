@@ -1,5 +1,17 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
+/// VK_EXT_descriptor_heap mode for DX12 games
+#[derive(Clone, Debug, Default, ValueEnum)]
+pub enum DescriptorHeapMode {
+    /// Enable if driver supports it (recommended)
+    #[default]
+    Auto,
+    /// Force enable (for testing)
+    On,
+    /// Force disable
+    Off,
+}
+
 #[derive(Debug, Parser)]
 #[command(
     author,
@@ -19,6 +31,10 @@ pub enum Commands {
     Run(RunArgs),
     /// Prepare a game (shader pre-warming, profile setup)
     Prepare(PrepareArgs),
+    /// Record a game to a file while it runs (requires `streaming` feature)
+    Record(RecordArgs),
+    /// Stream a game to RTMP/SRT while it runs (requires `streaming` feature)
+    Stream(StreamArgs),
     /// Manage detected games
     Games(GamesArgs),
     /// Steam integration (launch options, Proton, shortcuts)
@@ -35,6 +51,8 @@ pub enum Commands {
     Gamemode(GamemodeArgs),
     /// Manage nvproton configuration
     Config(ConfigArgs),
+    /// Show system status and driver readiness
+    Status(StatusArgs),
 }
 
 #[derive(Debug, Args)]
@@ -71,6 +89,10 @@ pub struct RunArgs {
     #[arg(long)]
     pub dry_run: bool,
 
+    /// VK_EXT_descriptor_heap mode for DX12 games (auto|on|off)
+    #[arg(long, value_enum, default_value_t = DescriptorHeapMode::Auto)]
+    pub descriptor_heap: DescriptorHeapMode,
+
     /// Additional arguments to pass to the game
     #[arg(last = true)]
     pub game_args: Vec<String>,
@@ -100,6 +122,44 @@ pub struct PrepareArgs {
 }
 
 #[derive(Debug, Args)]
+pub struct RecordArgs {
+    /// Steam AppID or game identifier
+    #[arg(value_name = "GAME_ID")]
+    pub game_id: Option<String>,
+
+    /// Record game by name (fuzzy match)
+    #[arg(long)]
+    pub name: Option<String>,
+
+    /// Profile to apply
+    #[arg(short, long)]
+    pub profile: Option<String>,
+
+    /// Output file path (container inferred from extension; default: ~/Videos/nvproton-<game>.mkv)
+    #[arg(short, long)]
+    pub output: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct StreamArgs {
+    /// Steam AppID or game identifier
+    #[arg(value_name = "GAME_ID")]
+    pub game_id: Option<String>,
+
+    /// Stream game by name (fuzzy match)
+    #[arg(long)]
+    pub name: Option<String>,
+
+    /// Profile to apply
+    #[arg(short, long)]
+    pub profile: Option<String>,
+
+    /// Stream URL (rtmp://... or srt://...)
+    #[arg(long)]
+    pub url: String,
+}
+
+#[derive(Debug, Args)]
 pub struct GamesArgs {
     #[command(subcommand)]
     pub command: GamesCommand,
@@ -117,6 +177,8 @@ pub enum GamesCommand {
     SetProfile(GamesSetProfileArgs),
     /// Show game launch command
     Info(GamesInfoArgs),
+    /// List DX12 games that benefit from descriptor_heap
+    Dx12(GamesDx12Args),
 }
 
 #[derive(Debug, Args)]
@@ -164,6 +226,17 @@ pub struct GamesInfoArgs {
     /// Show full launch command
     #[arg(long)]
     pub command: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct GamesDx12Args {
+    /// Show only installed games (from database)
+    #[arg(long)]
+    pub installed: bool,
+
+    /// Output format
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    pub format: OutputFormat,
 }
 
 #[derive(Debug, Args)]
@@ -463,6 +536,25 @@ pub enum MangohudCommand {
         #[arg(default_value = "standard")]
         preset: String,
     },
+}
+
+// ============================================================================
+// Status Command
+// ============================================================================
+
+#[derive(Debug, Args)]
+pub struct StatusArgs {
+    /// Output format
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    pub format: OutputFormat,
+
+    /// Show detailed information
+    #[arg(long, short)]
+    pub verbose: bool,
+
+    /// Check only (exit 0 if ready for descriptor_heap, 1 otherwise)
+    #[arg(long)]
+    pub check: bool,
 }
 
 // ============================================================================

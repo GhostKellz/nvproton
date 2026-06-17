@@ -5,12 +5,13 @@ use std::process::Command;
 
 use anyhow::{Context, Result};
 
-use crate::cli::{DescriptorHeapMode, PrepareArgs, RunArgs};
+use crate::cli::{DescriptorHeapMode, PrepareArgs, RecordArgs, RunArgs, StreamArgs};
 use crate::config::{ConfigManager, NvConfig};
 use crate::detection::proton_nv::{ProtonNvDetector, ProtonNvEnv, ProtonNvInstallation};
 use crate::detection::{DetectedGame, GameDatabase, GameSource, VulkanCapabilities};
 use crate::ffi;
 use crate::profile::{ProfileManager, ProfilePersistence};
+use crate::streaming::{Destination, Session};
 
 /// Runtime context for game launching
 pub struct RunContext<'a> {
@@ -52,11 +53,7 @@ impl<'a> RunContext<'a> {
         // Detect Vulkan capabilities (for descriptor_heap support)
         let vulkan_caps = match VulkanCapabilities::detect() {
             Ok(caps) => {
-                log::info!(
-                    "Vulkan: {} (driver {})",
-                    caps.gpu_name,
-                    caps.driver_version
-                );
+                log::info!("Vulkan: {} (driver {})", caps.gpu_name, caps.driver_version);
                 if caps.descriptor_heap {
                     log::info!("VK_EXT_descriptor_heap: supported");
                 }
@@ -104,6 +101,19 @@ impl<'a> RunContext<'a> {
 
 /// Handle the `run` command
 pub fn handle_run(args: RunArgs, manager: &ConfigManager, config: &mut NvConfig) -> Result<()> {
+    run_game(args, manager, config, true)
+}
+
+/// Launch a game with all optimizations applied.
+///
+/// `allow_auto_record` is disabled when the launch is already wrapped by an
+/// explicit `record`/`stream` capture session, to avoid double-capturing.
+fn run_game(
+    args: RunArgs,
+    manager: &ConfigManager,
+    config: &mut NvConfig,
+    allow_auto_record: bool,
+) -> Result<()> {
     let ctx = RunContext::new(config, manager)?;
     let game = ctx.find_game(args.game_id.as_deref(), args.name.as_deref())?;
 
@@ -129,18 +139,24 @@ pub fn handle_run(args: RunArgs, manager: &ConfigManager, config: &mut NvConfig)
         ctx.profile_persistence.get_binding(&game.id).ok().flatten()
     };
 
-    // Apply profile settings
+    // Apply profile settings, keeping the resolved tree for later inspection
+    // (e.g. noise-suppression / auto-record flags).
+    let mut profile_settings: Option<serde_norway::Value> = None;
     if let Some(profile_name) = &profile_name {
         let resolved = ctx.profile_manager.resolve(profile_name)?;
         println!("  Profile: {}", profile_name);
         apply_profile_to_env(&resolved.settings, &mut env_vars);
+        profile_settings = Some(resolved.settings);
     }
 
     // NVIDIA-specific optimizations via FFI
     // Configure Reflex via nvlatency library
     if args.reflex {
         // Check for Reflex 2.0 support (VK_NV_low_latency2 on 595+)
-        let has_reflex2 = ctx.vulkan_caps.as_ref().is_some_and(|c| c.supports_reflex2());
+        let has_reflex2 = ctx
+            .vulkan_caps
+            .as_ref()
+            .is_some_and(|c| c.supports_reflex2());
 
         // Set environment variables as fallback for DXVK/Wine
         env_vars.insert("__GL_REFLEX".into(), "1".into());
@@ -175,15 +191,15 @@ pub fn handle_run(args: RunArgs, manager: &ConfigManager, config: &mut NvConfig)
     }
 
     // Configure via FFI for system-level VRR and frame limiting
-    if args.vrr || args.fps > 0 {
-        if let Err(e) = configure_vrr(args.vrr, args.fps) {
-            log::warn!("VRR/FPS FFI configuration failed: {}", e);
-            if args.vrr {
-                println!("  VRR: enabled (env vars only)");
-            }
-            if args.fps > 0 {
-                println!("  FPS Limit: {} (env vars only)", args.fps);
-            }
+    if (args.vrr || args.fps > 0)
+        && let Err(e) = configure_vrr(args.vrr, args.fps)
+    {
+        log::warn!("VRR/FPS FFI configuration failed: {}", e);
+        if args.vrr {
+            println!("  VRR: enabled (env vars only)");
+        }
+        if args.fps > 0 {
+            println!("  FPS Limit: {} (env vars only)", args.fps);
         }
     }
 
@@ -196,49 +212,56 @@ pub fn handle_run(args: RunArgs, manager: &ConfigManager, config: &mut NvConfig)
         .vulkan_caps
         .as_ref()
         .is_some_and(|c| c.supports_dx12_heap_fix());
-    let is_595 = ctx.vulkan_caps.as_ref().is_some_and(|c| c.is_595_series());
+    let is_dx12_branch = ctx
+        .vulkan_caps
+        .as_ref()
+        .is_some_and(|c| c.has_dx12_heap_branch());
 
     let use_descriptor_heap = match args.descriptor_heap {
         DescriptorHeapMode::On => true,
         DescriptorHeapMode::Off => false,
         DescriptorHeapMode::Auto => {
-            // Auto-enable on 595+ if config allows, or if extension is available
-            (config.vkd3d.auto_enable_595 && is_595) || has_descriptor_heap
+            // Auto-enable on DX12-capable branches if config allows, or if the
+            // extension is actually present.
+            (config.vkd3d.auto_enable_dx12_heap && is_dx12_branch) || has_descriptor_heap
         }
     };
 
     if use_descriptor_heap {
         // Build VKD3D_CONFIG with all relevant flags
-        let vkd3d_config =
-            config
-                .vkd3d
-                .build_config_string(has_descriptor_heap, has_heap_fix);
+        let vkd3d_config = config
+            .vkd3d
+            .build_config_string(has_descriptor_heap, has_heap_fix);
         if !vkd3d_config.is_empty() {
             env_vars.insert("VKD3D_CONFIG".into(), vkd3d_config);
         }
-        env_vars.insert("VKD3D_FEATURE_LEVEL".into(), config.vkd3d.feature_level.clone());
+        env_vars.insert(
+            "VKD3D_FEATURE_LEVEL".into(),
+            config.vkd3d.feature_level.clone(),
+        );
 
         if has_heap_fix {
-            println!("  Descriptor Heap: enabled (DX12 optimization + 595 heap fix)");
+            println!("  Descriptor Heap: enabled (DX12 optimization + heap fix)");
         } else {
             println!("  Descriptor Heap: enabled (DX12 optimization)");
         }
     }
 
-    // Warn about beta driver if configured (but 595 is recommended so note that)
-    if let Some(ref caps) = ctx.vulkan_caps {
-        if caps.is_beta_driver() && config.vkd3d.warn_beta_driver {
-            if caps.is_595_series() {
-                eprintln!(
-                    "  Note: 595 beta driver {} - recommended for DX12 games (heap fixes included)",
-                    caps.driver_version
-                );
-            } else {
-                eprintln!(
-                    "  Warning: Beta driver {} detected. Consider updating to 595.x for heap fixes.",
-                    caps.driver_version
-                );
-            }
+    // Note beta drivers; DX12-capable branches already include the heap fixes.
+    if let Some(ref caps) = ctx.vulkan_caps
+        && caps.is_beta_driver()
+        && config.vkd3d.warn_beta_driver
+    {
+        if caps.has_dx12_heap_branch() {
+            eprintln!(
+                "  Note: beta driver {} - includes DX12 heap fixes",
+                caps.driver_version
+            );
+        } else {
+            eprintln!(
+                "  Warning: Beta driver {} detected. Consider updating to branch 595+ for DX12 heap fixes.",
+                caps.driver_version
+            );
         }
     }
 
@@ -253,15 +276,70 @@ pub fn handle_run(args: RunArgs, manager: &ConfigManager, config: &mut NvConfig)
     // Build launch command based on game source
     let launch_cmd = build_launch_command(&game, &args.game_args)?;
 
+    // Resolve microphone noise-suppression intent (profile flag + env override).
+    let (noise_enabled, noise_strength) = resolve_noise_suppression(profile_settings.as_ref());
+    // Resolve auto-record intent (suppressed when wrapped by record/stream).
+    let auto_record = allow_auto_record && resolve_auto_record(profile_settings.as_ref());
+
     if args.dry_run {
         println!("\n[Dry Run] Would execute:");
         println!("  Command: {:?}", launch_cmd);
+        if noise_enabled {
+            println!(
+                "  Noise suppression: would start GhostWave Clean virtual source{}",
+                noise_strength
+                    .map(|s| format!(" (strength {s})"))
+                    .unwrap_or_default()
+            );
+        }
+        if auto_record {
+            println!(
+                "  Auto-record: would capture to {}",
+                default_record_path(&args.game_id, &args.name).display()
+            );
+        }
         println!("  Environment:");
         for (key, value) in &env_vars {
             println!("    {}={}", key, value);
         }
         return Ok(());
     }
+
+    // Start microphone noise suppression before launch; held until the game exits.
+    let _noise_session = if noise_enabled {
+        match crate::audio::NoiseSuppression::start(noise_strength) {
+            Ok(session) => {
+                println!(
+                    "  Noise suppression: GhostWave Clean active ({})",
+                    session.processing_mode()
+                );
+                Some(session)
+            }
+            Err(e) => {
+                eprintln!("  Warning: noise suppression unavailable: {}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    // Start auto-record before launch; held until the game exits.
+    let _auto_record_session = if auto_record {
+        let path = default_record_path(&args.game_id, &args.name);
+        match Session::start(Destination::File(path.clone())) {
+            Ok(session) => {
+                println!("  Auto-record: capturing to {}", path.display());
+                Some(session)
+            }
+            Err(e) => {
+                eprintln!("  Warning: auto-record unavailable: {}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     // Execute the game
     println!("\nLaunching {}...", game.name);
@@ -299,7 +377,10 @@ pub fn handle_prepare(
 
     // Report Proton-NV status
     if let Some(ref proton_nv) = ctx.proton_nv {
-        println!("  Proton-NV: {} (will be used at launch)", proton_nv.version);
+        println!(
+            "  Proton-NV: {} (will be used at launch)",
+            proton_nv.version
+        );
         if let Some(ref info) = proton_nv.version_info {
             if let Some(ref driver) = info.nvidia_driver_min {
                 println!("    Requires: NVIDIA driver {}", driver);
@@ -317,9 +398,18 @@ pub fn handle_prepare(
         // Verify profile exists by resolving it
         let _resolved = ctx.profile_manager.resolve(profile_name)?;
         // Persist game->profile binding
-        ctx.profile_persistence.bind(&game.id, profile_name)
-            .with_context(|| format!("failed to bind profile '{}' to game '{}'", profile_name, game.id))?;
-        println!("  Profile: {} (bound to game, will be applied at launch)", profile_name);
+        ctx.profile_persistence
+            .bind(&game.id, profile_name)
+            .with_context(|| {
+                format!(
+                    "failed to bind profile '{}' to game '{}'",
+                    profile_name, game.id
+                )
+            })?;
+        println!(
+            "  Profile: {} (bound to game, will be applied at launch)",
+            profile_name
+        );
     }
 
     // Shader pre-warming
@@ -612,35 +702,182 @@ fn build_launch_command(game: &DetectedGame, extra_args: &[String]) -> Result<Ve
     Ok(cmd)
 }
 
+/// Resolve whether microphone noise suppression should run, and at what strength.
+///
+/// Precedence: the `NVPROTON_GHOSTWAVE` environment variable overrides the
+/// profile's `noise_suppression` flag. Strength comes from the profile's
+/// `noise_suppression_strength` key (0.0–1.0) when present.
+fn resolve_noise_suppression(settings: Option<&serde_norway::Value>) -> (bool, Option<f32>) {
+    use serde_norway::Value;
+
+    let mut enabled = false;
+    let mut strength = None;
+
+    if let Some(Value::Mapping(map)) = settings {
+        match map.get(Value::String("noise_suppression".into())) {
+            Some(Value::Bool(b)) => enabled = *b,
+            Some(Value::String(s)) => {
+                enabled = matches!(s.as_str(), "on" | "true" | "enabled" | "1")
+            }
+            _ => {}
+        }
+        if let Some(Value::Number(n)) = map.get(Value::String("noise_suppression_strength".into()))
+        {
+            strength = n.as_f64().map(|f| f as f32);
+        }
+    }
+
+    // Environment override takes precedence over the profile flag.
+    match env::var("NVPROTON_GHOSTWAVE").ok().as_deref() {
+        Some("1" | "on" | "true" | "enabled") => enabled = true,
+        Some("0" | "off" | "false" | "disabled") => enabled = false,
+        _ => {}
+    }
+
+    (enabled, strength)
+}
+
+/// Resolve whether a launch should be auto-recorded.
+///
+/// Precedence: the `NVPROTON_AUTORECORD` environment variable overrides the
+/// profile's `auto_record` flag.
+fn resolve_auto_record(settings: Option<&serde_norway::Value>) -> bool {
+    use serde_norway::Value;
+
+    let mut enabled = false;
+    if let Some(Value::Mapping(map)) = settings {
+        match map.get(Value::String("auto_record".into())) {
+            Some(Value::Bool(b)) => enabled = *b,
+            Some(Value::String(s)) => {
+                enabled = matches!(s.as_str(), "on" | "true" | "enabled" | "1")
+            }
+            _ => {}
+        }
+    }
+
+    match env::var("NVPROTON_AUTORECORD").ok().as_deref() {
+        Some("1" | "on" | "true" | "enabled") => enabled = true,
+        Some("0" | "off" | "false" | "disabled") => enabled = false,
+        _ => {}
+    }
+
+    enabled
+}
+
+/// Default capture output path: `~/Videos/nvproton-<game>.mkv` (cwd fallback).
+fn default_record_path(game_id: &Option<String>, name: &Option<String>) -> PathBuf {
+    let label = name
+        .clone()
+        .or_else(|| game_id.clone())
+        .unwrap_or_else(|| "capture".to_string());
+    let label: String = label
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '_' })
+        .collect();
+    let dir = dirs::video_dir().unwrap_or_else(|| PathBuf::from("."));
+    dir.join(format!("nvproton-{label}.mkv"))
+}
+
+/// Handle the `record` command: capture a game to a file while it runs.
+pub fn handle_record(
+    args: RecordArgs,
+    manager: &ConfigManager,
+    config: &mut NvConfig,
+) -> Result<()> {
+    let path = args
+        .output
+        .map(PathBuf::from)
+        .unwrap_or_else(|| default_record_path(&args.game_id, &args.name));
+    println!("Recording to: {}", path.display());
+    run_with_capture(
+        Destination::File(path),
+        args.game_id,
+        args.name,
+        args.profile,
+        manager,
+        config,
+    )
+}
+
+/// Handle the `stream` command: stream a game to RTMP/SRT while it runs.
+pub fn handle_stream(
+    args: StreamArgs,
+    manager: &ConfigManager,
+    config: &mut NvConfig,
+) -> Result<()> {
+    let dest = if args.url.starts_with("srt://") {
+        Destination::Srt(args.url.clone())
+    } else {
+        Destination::Rtmp(args.url.clone())
+    };
+    println!("Streaming to: {}", args.url);
+    run_with_capture(dest, args.game_id, args.name, args.profile, manager, config)
+}
+
+/// Start a capture session, launch the game, then stop capture on exit.
+fn run_with_capture(
+    dest: Destination,
+    game_id: Option<String>,
+    name: Option<String>,
+    profile: Option<String>,
+    manager: &ConfigManager,
+    config: &mut NvConfig,
+) -> Result<()> {
+    let session = Session::start(dest)?;
+    println!("  Capture: started");
+
+    let run_args = RunArgs {
+        game_id,
+        name,
+        profile,
+        reflex: false,
+        fps: 0,
+        vrr: false,
+        no_prewarm: false,
+        dry_run: false,
+        descriptor_heap: DescriptorHeapMode::Auto,
+        game_args: Vec::new(),
+    };
+
+    // Disable auto-record: this launch is already wrapped by an explicit session.
+    let result = run_game(run_args, manager, config, false);
+
+    session.stop();
+    println!("  Capture: stopped");
+    result
+}
+
 /// Apply profile settings to environment variables
-fn apply_profile_to_env(settings: &serde_yaml::Value, env_vars: &mut HashMap<String, String>) {
-    if let serde_yaml::Value::Mapping(map) = settings {
+fn apply_profile_to_env(settings: &serde_norway::Value, env_vars: &mut HashMap<String, String>) {
+    if let serde_norway::Value::Mapping(map) = settings {
         // Handle env section directly
-        if let Some(serde_yaml::Value::Mapping(env_map)) =
-            map.get(serde_yaml::Value::String("env".into()))
+        if let Some(serde_norway::Value::Mapping(env_map)) =
+            map.get(serde_norway::Value::String("env".into()))
         {
             for (key, value) in env_map {
-                if let (serde_yaml::Value::String(k), serde_yaml::Value::String(v)) = (key, value) {
+                if let (serde_norway::Value::String(k), serde_norway::Value::String(v)) =
+                    (key, value)
+                {
                     env_vars.insert(k.clone(), v.clone());
                 }
             }
         }
 
         // Handle nvidia section
-        if let Some(serde_yaml::Value::Mapping(nvidia_map)) =
-            map.get(serde_yaml::Value::String("nvidia".into()))
+        if let Some(serde_norway::Value::Mapping(nvidia_map)) =
+            map.get(serde_norway::Value::String("nvidia".into()))
         {
             for (key, value) in nvidia_map {
-                if let serde_yaml::Value::String(k) = key {
+                if let serde_norway::Value::String(k) = key {
                     let env_key = format!("__GL_{}", k.to_uppercase());
                     match value {
-                        serde_yaml::Value::Bool(b) => {
+                        serde_norway::Value::Bool(b) => {
                             env_vars.insert(env_key, if *b { "1" } else { "0" }.into());
                         }
-                        serde_yaml::Value::Number(n) => {
+                        serde_norway::Value::Number(n) => {
                             env_vars.insert(env_key, n.to_string());
                         }
-                        serde_yaml::Value::String(s) => {
+                        serde_norway::Value::String(s) => {
                             env_vars.insert(env_key, s.clone());
                         }
                         _ => {}
@@ -650,20 +887,20 @@ fn apply_profile_to_env(settings: &serde_yaml::Value, env_vars: &mut HashMap<Str
         }
 
         // Handle dxvk section
-        if let Some(serde_yaml::Value::Mapping(dxvk_map)) =
-            map.get(serde_yaml::Value::String("dxvk".into()))
+        if let Some(serde_norway::Value::Mapping(dxvk_map)) =
+            map.get(serde_norway::Value::String("dxvk".into()))
         {
             for (key, value) in dxvk_map {
-                if let serde_yaml::Value::String(k) = key {
+                if let serde_norway::Value::String(k) = key {
                     let env_key = format!("DXVK_{}", k.to_uppercase());
                     match value {
-                        serde_yaml::Value::Bool(b) => {
+                        serde_norway::Value::Bool(b) => {
                             env_vars.insert(env_key, if *b { "1" } else { "0" }.into());
                         }
-                        serde_yaml::Value::Number(n) => {
+                        serde_norway::Value::Number(n) => {
                             env_vars.insert(env_key, n.to_string());
                         }
-                        serde_yaml::Value::String(s) => {
+                        serde_norway::Value::String(s) => {
                             env_vars.insert(env_key, s.clone());
                         }
                         _ => {}
@@ -673,12 +910,12 @@ fn apply_profile_to_env(settings: &serde_yaml::Value, env_vars: &mut HashMap<Str
         }
 
         // Handle vkd3d section
-        if let Some(serde_yaml::Value::Mapping(vkd3d_map)) =
-            map.get(serde_yaml::Value::String("vkd3d".into()))
+        if let Some(serde_norway::Value::Mapping(vkd3d_map)) =
+            map.get(serde_norway::Value::String("vkd3d".into()))
         {
             // Handle descriptor_heap setting
-            if let Some(serde_yaml::Value::String(mode)) =
-                vkd3d_map.get(&serde_yaml::Value::String("descriptor_heap".into()))
+            if let Some(serde_norway::Value::String(mode)) =
+                vkd3d_map.get(serde_norway::Value::String("descriptor_heap".into()))
             {
                 match mode.as_str() {
                     "on" | "enabled" | "true" => {
@@ -695,15 +932,15 @@ fn apply_profile_to_env(settings: &serde_yaml::Value, env_vars: &mut HashMap<Str
             }
 
             // Handle config setting (VKD3D_CONFIG value)
-            if let Some(serde_yaml::Value::String(config_val)) =
-                vkd3d_map.get(&serde_yaml::Value::String("config".into()))
+            if let Some(serde_norway::Value::String(config_val)) =
+                vkd3d_map.get(serde_norway::Value::String("config".into()))
             {
                 env_vars.insert("VKD3D_CONFIG".into(), config_val.clone());
             }
 
             // Handle feature_level setting
-            if let Some(serde_yaml::Value::String(level)) =
-                vkd3d_map.get(&serde_yaml::Value::String("feature_level".into()))
+            if let Some(serde_norway::Value::String(level)) =
+                vkd3d_map.get(serde_norway::Value::String("feature_level".into()))
             {
                 env_vars.insert("VKD3D_FEATURE_LEVEL".into(), level.clone());
             }

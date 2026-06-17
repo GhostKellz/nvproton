@@ -1,12 +1,39 @@
-.zig-cache/
-zig-out/
-*.o
-*.exe
-CLAUDE.md
-TODO.md
-DEVELOPMENT_ROADMAP.md
+target/
+**/*.rs.bk
 
+CLAUDE.md
+
+# GUI build output
+crates/strix-gui/dist/
+
+# Docker
+docker-build/
+
+# Local data
+data/
+dev-data/
+test-data/
+
+# Environment files
+.env
+.env.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
 
 # Added by cargo
+#
+# already existing elements were commented out
 
-/target
+#/target
+
+# ck stuff
+archive/ 
+tasks/

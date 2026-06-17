@@ -24,7 +24,7 @@ pub enum Position {
 
 impl Position {
     #[allow(dead_code)] // Library API
-    pub fn to_config(&self) -> &'static str {
+    pub fn to_config(self) -> &'static str {
         match self {
             Self::TopLeft => "top-left",
             Self::TopRight => "top-right",

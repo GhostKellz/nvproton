@@ -482,7 +482,7 @@ impl NvSyncDisplay {
 
 /// System status from nvsync
 #[repr(C)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct NvSyncStatus {
     pub nvidia_detected: bool,
     pub driver_version: [u8; 32],
@@ -491,20 +491,6 @@ pub struct NvSyncStatus {
     pub vrr_enabled_count: u32,
     pub compositor: [u8; 32],
     pub is_wayland: bool,
-}
-
-impl Default for NvSyncStatus {
-    fn default() -> Self {
-        Self {
-            nvidia_detected: false,
-            driver_version: [0; 32],
-            display_count: 0,
-            vrr_capable_count: 0,
-            vrr_enabled_count: 0,
-            compositor: [0; 32],
-            is_wayland: false,
-        }
-    }
 }
 
 impl NvSyncStatus {
@@ -621,7 +607,7 @@ impl NvSync {
 
     /// Enable VRR on a display (None for all displays)
     pub fn enable_vrr(&self, display_name: Option<&str>) -> FfiResult<()> {
-        let name_cstring = display_name.map(|s| CString::new(s)).transpose()?;
+        let name_cstring = display_name.map(CString::new).transpose()?;
         let name_ptr = name_cstring
             .as_ref()
             .map(|s| s.as_ptr())
@@ -641,7 +627,7 @@ impl NvSync {
 
     /// Disable VRR on a display (None for all displays)
     pub fn disable_vrr(&self, display_name: Option<&str>) -> FfiResult<()> {
-        let name_cstring = display_name.map(|s| CString::new(s)).transpose()?;
+        let name_cstring = display_name.map(CString::new).transpose()?;
         let name_ptr = name_cstring
             .as_ref()
             .map(|s| s.as_ptr())
@@ -752,8 +738,8 @@ pub const LIB_PATHS: &[&str] = &[
     "/usr/lib/nvproton",
     "/usr/local/lib/nvproton",
     // System paths
-    "/usr/lib/x86_64-linux-gnu",  // Debian/Ubuntu multiarch
-    "/usr/lib64",                  // Fedora/RHEL
+    "/usr/lib/x86_64-linux-gnu", // Debian/Ubuntu multiarch
+    "/usr/lib64",                // Fedora/RHEL
     "/usr/lib",
     "/usr/local/lib",
     // Development paths (for testing)
@@ -782,12 +768,23 @@ impl LibraryDiscovery {
         let search_paths = Self::build_search_paths();
 
         Self {
-            nvshader: Self::find_library_in_paths("libnvshader.so", &search_paths)
-                .or_else(|| std::env::var(ENV_SHADER_LIB).ok().map(std::path::PathBuf::from)),
-            nvlatency: Self::find_library_in_paths("libnvlatency.so", &search_paths)
-                .or_else(|| std::env::var(ENV_LATENCY_LIB).ok().map(std::path::PathBuf::from)),
-            nvsync: Self::find_library_in_paths("libnvsync.so", &search_paths)
-                .or_else(|| std::env::var(ENV_SYNC_LIB).ok().map(std::path::PathBuf::from)),
+            nvshader: Self::find_library_in_paths("libnvshader.so", &search_paths).or_else(|| {
+                std::env::var(ENV_SHADER_LIB)
+                    .ok()
+                    .map(std::path::PathBuf::from)
+            }),
+            nvlatency: Self::find_library_in_paths("libnvlatency.so", &search_paths).or_else(
+                || {
+                    std::env::var(ENV_LATENCY_LIB)
+                        .ok()
+                        .map(std::path::PathBuf::from)
+                },
+            ),
+            nvsync: Self::find_library_in_paths("libnvsync.so", &search_paths).or_else(|| {
+                std::env::var(ENV_SYNC_LIB)
+                    .ok()
+                    .map(std::path::PathBuf::from)
+            }),
             search_paths,
         }
     }
@@ -833,16 +830,16 @@ impl LibraryDiscovery {
         }
 
         // 5. Executable directory (for portable installs)
-        if let Ok(exe_path) = std::env::current_exe() {
-            if let Some(exe_dir) = exe_path.parent() {
-                let lib_dir = exe_dir.join("lib");
-                if lib_dir.is_dir() && !paths.contains(&lib_dir) {
-                    paths.push(lib_dir);
-                }
-                // Also check exe_dir itself
-                if !paths.contains(&exe_dir.to_path_buf()) {
-                    paths.push(exe_dir.to_path_buf());
-                }
+        if let Ok(exe_path) = std::env::current_exe()
+            && let Some(exe_dir) = exe_path.parent()
+        {
+            let lib_dir = exe_dir.join("lib");
+            if lib_dir.is_dir() && !paths.contains(&lib_dir) {
+                paths.push(lib_dir);
+            }
+            // Also check exe_dir itself
+            if !paths.contains(&exe_dir.to_path_buf()) {
+                paths.push(exe_dir.to_path_buf());
             }
         }
 
@@ -850,7 +847,10 @@ impl LibraryDiscovery {
     }
 
     /// Find a library in the given search paths
-    fn find_library_in_paths(name: &str, paths: &[std::path::PathBuf]) -> Option<std::path::PathBuf> {
+    fn find_library_in_paths(
+        name: &str,
+        paths: &[std::path::PathBuf],
+    ) -> Option<std::path::PathBuf> {
         for base in paths {
             let path = base.join(name);
             if path.exists() && path.is_file() {
@@ -927,9 +927,18 @@ impl LoadedLibraries {
     pub fn load_available() -> Self {
         let discovery = LibraryDiscovery::discover();
         Self {
-            shader: discovery.nvshader.as_ref().and_then(|p| unsafe { NvShader::load(p).ok() }),
-            latency: discovery.nvlatency.as_ref().and_then(|p| unsafe { NvLatency::load(p).ok() }),
-            sync: discovery.nvsync.as_ref().and_then(|p| unsafe { NvSync::load(p).ok() }),
+            shader: discovery
+                .nvshader
+                .as_ref()
+                .and_then(|p| unsafe { NvShader::load(p).ok() }),
+            latency: discovery
+                .nvlatency
+                .as_ref()
+                .and_then(|p| unsafe { NvLatency::load(p).ok() }),
+            sync: discovery
+                .nvsync
+                .as_ref()
+                .and_then(|p| unsafe { NvSync::load(p).ok() }),
             discovery,
         }
     }

@@ -1,11 +1,12 @@
 use anyhow::Result;
 
 use crate::cli::{
-    GamesArgs, GamesCommand, GamesInfoArgs, GamesListArgs, GamesScanArgs, GamesSetProfileArgs,
-    GamesShowArgs, OutputFormat,
+    GamesArgs, GamesCommand, GamesDx12Args, GamesInfoArgs, GamesListArgs, GamesScanArgs,
+    GamesSetProfileArgs, GamesShowArgs, OutputFormat,
 };
 use crate::config::{ConfigManager, NvConfig};
 use crate::detection::{self, DetectionContext, GameDatabase, GameSource};
+use crate::dx12_games;
 
 /// Handle the `games` command
 pub fn handle_games(args: GamesArgs, manager: &ConfigManager, config: &mut NvConfig) -> Result<()> {
@@ -15,6 +16,7 @@ pub fn handle_games(args: GamesArgs, manager: &ConfigManager, config: &mut NvCon
         GamesCommand::Scan(scan_args) => handle_scan(scan_args, manager, config),
         GamesCommand::SetProfile(set_args) => handle_set_profile(set_args, manager, config),
         GamesCommand::Info(info_args) => handle_info(info_args, manager, config),
+        GamesCommand::Dx12(dx12_args) => handle_dx12(dx12_args, manager, config),
     }
 }
 
@@ -43,18 +45,37 @@ fn handle_list(args: GamesListArgs, manager: &ConfigManager, _config: &NvConfig)
 
     match args.format {
         OutputFormat::Text => {
-            println!("{:<12} {:<10} Name", "ID", "Source");
-            println!("{}", "-".repeat(60));
+            println!("{:<12} {:<10} {:<6} Name", "ID", "Source", "API");
+            println!("{}", "-".repeat(70));
+            let mut dx12_count = 0;
             for game in &games {
-                println!("{:<12} {:<10} {}", game.id, game.source, game.name);
+                let api = if game.source == GameSource::Steam {
+                    dx12_games::get_game_api(&game.id)
+                } else {
+                    dx12_games::GameApi::Unknown
+                };
+                if api == dx12_games::GameApi::Dx12 {
+                    dx12_count += 1;
+                }
+                println!(
+                    "{:<12} {:<10} {:<6} {}",
+                    game.id,
+                    game.source,
+                    api.as_str(),
+                    game.name
+                );
             }
-            println!("\n{} games found", games.len());
+            println!(
+                "\n{} games found ({} DX12 - will benefit from descriptor_heap)",
+                games.len(),
+                dx12_count
+            );
         }
         OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&games)?);
         }
         OutputFormat::Yaml => {
-            println!("{}", serde_yaml::to_string(&games)?);
+            println!("{}", serde_norway::to_string(&games)?);
         }
     }
 
@@ -68,6 +89,16 @@ fn handle_show(args: GamesShowArgs, manager: &ConfigManager, _config: &NvConfig)
         println!("Name:        {}", game.name);
         println!("ID:          {}", game.id);
         println!("Source:      {}", game.source);
+
+        // Show API type for Steam games
+        if game.source == GameSource::Steam {
+            let api = dx12_games::get_game_api(&game.id);
+            println!("API:         {}", api.as_str());
+            if api.benefits_from_descriptor_heap() {
+                println!("             (will benefit from VK_EXT_descriptor_heap)");
+            }
+        }
+
         println!("Install Dir: {:?}", game.install_dir);
         if let Some(exe) = &game.executable {
             println!("Executable:  {:?}", exe);
@@ -172,6 +203,93 @@ fn handle_set_profile(
         "Profile '{}' assigned to game '{}'",
         args.profile, args.game_id
     );
+    Ok(())
+}
+
+fn handle_dx12(args: GamesDx12Args, manager: &ConfigManager, _config: &NvConfig) -> Result<()> {
+    if args.installed {
+        // Show only installed DX12 games from database
+        let db = GameDatabase::load_or_default(manager.paths())?;
+        let dx12_games_installed: Vec<_> = db
+            .games()
+            .filter(|g| {
+                g.source == GameSource::Steam
+                    && dx12_games::get_game_api(&g.id) == dx12_games::GameApi::Dx12
+            })
+            .collect();
+
+        if dx12_games_installed.is_empty() {
+            println!("No installed DX12 games found.");
+            println!("Run 'nvproton games scan' to detect games.");
+            return Ok(());
+        }
+
+        match args.format {
+            OutputFormat::Text => {
+                println!("Installed DX12 Games (will benefit from VK_EXT_descriptor_heap):");
+                println!("{}", "-".repeat(60));
+                for game in &dx12_games_installed {
+                    println!("  {} - {}", game.id, game.name);
+                }
+                println!("\n{} DX12 games installed", dx12_games_installed.len());
+            }
+            OutputFormat::Json => {
+                println!("{}", serde_json::to_string_pretty(&dx12_games_installed)?);
+            }
+            OutputFormat::Yaml => {
+                println!("{}", serde_norway::to_string(&dx12_games_installed)?);
+            }
+        }
+    } else {
+        // Show all known DX12 games
+        let known: Vec<_> = dx12_games::known_dx12_games().collect();
+
+        match args.format {
+            OutputFormat::Text => {
+                println!(
+                    "Known DX12 Games ({} titles - will benefit from VK_EXT_descriptor_heap):",
+                    known.len()
+                );
+                println!("{}", "-".repeat(60));
+                for (app_id, info) in &known {
+                    println!("  {} - {}", app_id, info.name);
+                }
+                println!("\nUse --installed to show only games you have installed.");
+            }
+            OutputFormat::Json => {
+                let json: Vec<_> = known
+                    .iter()
+                    .map(|(id, info)| {
+                        serde_json::json!({
+                            "app_id": id,
+                            "name": info.name,
+                            "api": "DX12"
+                        })
+                    })
+                    .collect();
+                println!("{}", serde_json::to_string_pretty(&json)?);
+            }
+            OutputFormat::Yaml => {
+                let yaml: Vec<_> = known
+                    .iter()
+                    .map(|(id, info)| {
+                        serde_norway::Mapping::from_iter([
+                            (
+                                serde_norway::Value::String("app_id".into()),
+                                serde_norway::Value::String(id.to_string()),
+                            ),
+                            (
+                                serde_norway::Value::String("name".into()),
+                                serde_norway::Value::String(info.name.to_string()),
+                            ),
+                        ])
+                    })
+                    .collect();
+                println!("{}", serde_norway::to_string(&yaml)?);
+            }
+        }
+    }
+
     Ok(())
 }
 

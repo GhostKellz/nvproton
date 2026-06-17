@@ -1,21 +1,21 @@
 //! System status and driver readiness reporting
 //!
 //! Provides comprehensive system status including:
-//! - Vulkan driver and extension support (595+ features)
+//! - Vulkan driver and extension support (DX12 heap-fix features, 595+)
 //! - vkd3d-proton installation and version
 //! - Proton-NV detection
 //! - DX12 readiness (descriptor_heap + extended sparse support)
 //! - Reflex 2.0 and frame pacing capabilities
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::cli::{OutputFormat, StatusArgs};
 use crate::config::ConfigManager;
-use crate::detection::proton_nv::ProtonNvDetector;
 use crate::detection::VulkanCapabilities;
+use crate::detection::proton_nv::ProtonNvDetector;
 use crate::gamemode;
 use crate::mangohud;
 
@@ -26,6 +26,8 @@ pub struct SystemStatus {
     pub vkd3d_proton: Option<Vkd3dProtonStatus>,
     pub proton_nv: Option<ProtonNvStatus>,
     pub tools: ToolsStatus,
+    pub audio: crate::audio::AudioStatus,
+    pub encoder: crate::streaming::EncoderStatus,
     pub dx12_ready: bool,
     pub dx12_ready_reason: String,
 }
@@ -37,7 +39,8 @@ pub struct VulkanStatus {
     pub driver_version: String,
     pub driver_branch: u32,
     pub is_beta: bool,
-    pub is_595_series: bool,
+    /// Driver branch is new enough (595+) to ship the DX12 heap-fix feature set
+    pub dx12_heap_branch: bool,
     // DX12/vkd3d-proton extensions
     pub descriptor_heap: bool,
     pub descriptor_buffer: bool,
@@ -55,7 +58,7 @@ impl From<&VulkanCapabilities> for VulkanStatus {
             driver_version: caps.driver_version.clone(),
             driver_branch: caps.driver_branch,
             is_beta: caps.is_beta_driver(),
-            is_595_series: caps.is_595_series(),
+            dx12_heap_branch: caps.has_dx12_heap_branch(),
             descriptor_heap: caps.descriptor_heap,
             descriptor_buffer: caps.descriptor_buffer,
             raw_access_chains: caps.raw_access_chains,
@@ -94,10 +97,14 @@ pub struct ToolsStatus {
 impl SystemStatus {
     /// Detect full system status
     pub fn detect() -> Self {
-        let vulkan = VulkanCapabilities::detect().ok().map(|c| VulkanStatus::from(&c));
+        let vulkan = VulkanCapabilities::detect()
+            .ok()
+            .map(|c| VulkanStatus::from(&c));
         let vkd3d_proton = detect_vkd3d_proton();
         let proton_nv = detect_proton_nv();
         let tools = detect_tools();
+        let audio = crate::audio::status();
+        let encoder = crate::streaming::status();
 
         // Determine DX12 readiness
         let (dx12_ready, dx12_ready_reason) = evaluate_dx12_readiness(&vulkan, &vkd3d_proton);
@@ -107,6 +114,8 @@ impl SystemStatus {
             vkd3d_proton,
             proton_nv,
             tools,
+            audio,
+            encoder,
             dx12_ready,
             dx12_ready_reason,
         }
@@ -118,73 +127,76 @@ impl SystemStatus {
     }
 }
 
-/// Detect vkd3d-proton installation
+/// Detect vkd3d-proton installation.
+///
+/// vkd3d-proton is almost always bundled inside a Proton build rather than
+/// installed standalone, so this checks (in order): an explicit
+/// `VKD3D_PROTON_PATH`, standalone system/user installs, then every Proton
+/// build under each Steam root.
 fn detect_vkd3d_proton() -> Option<Vkd3dProtonStatus> {
-    // Check common vkd3d-proton locations
-    let search_paths = [
-        // System installations
-        "/usr/share/vkd3d-proton",
-        "/usr/local/share/vkd3d-proton",
-        // Flatpak
-        "/var/lib/flatpak/runtime/org.freedesktop.Platform.VulkanLayer.vkd3d-proton",
-        // User installations
-        &format!(
-            "{}/.local/share/vkd3d-proton",
-            std::env::var("HOME").unwrap_or_default()
-        ),
+    // 1. Explicit override via environment.
+    if let Some(path) = std::env::var("VKD3D_PROTON_PATH").ok().map(PathBuf::from)
+        && path.exists()
+    {
+        let version = read_vkd3d_version(&path);
+        let descriptor_heap_support = version
+            .as_deref()
+            .is_some_and(version_supports_descriptor_heap);
+        return Some(Vkd3dProtonStatus {
+            installed: true,
+            version,
+            path: Some(path),
+            descriptor_heap_support,
+        });
+    }
+
+    // 2. Standalone system/user installs.
+    let home = std::env::var("HOME").unwrap_or_default();
+    let standalone_paths = [
+        "/usr/share/vkd3d-proton".to_string(),
+        "/usr/local/share/vkd3d-proton".to_string(),
+        "/var/lib/flatpak/runtime/org.freedesktop.Platform.VulkanLayer.vkd3d-proton".to_string(),
+        format!("{home}/.local/share/vkd3d-proton"),
     ];
-
-    // Also check via wine prefix environment
-    let wine_vkd3d = std::env::var("VKD3D_PROTON_PATH").ok();
-
-    let mut found_path: Option<PathBuf> = None;
-    let mut version: Option<String> = None;
-
-    // Check environment variable first
-    if let Some(ref path) = wine_vkd3d {
-        let p = PathBuf::from(path);
-        if p.exists() {
-            found_path = Some(p.clone());
-            version = read_vkd3d_version(&p);
+    for path_str in &standalone_paths {
+        let path = PathBuf::from(path_str);
+        if path.exists() {
+            let version = read_vkd3d_version(&path);
+            let descriptor_heap_support = version
+                .as_deref()
+                .is_some_and(version_supports_descriptor_heap);
+            return Some(Vkd3dProtonStatus {
+                installed: true,
+                version,
+                path: Some(path),
+                descriptor_heap_support,
+            });
         }
     }
 
-    // Check standard paths
-    if found_path.is_none() {
-        for path_str in &search_paths {
-            let path = PathBuf::from(path_str);
-            if path.exists() {
-                version = read_vkd3d_version(&path);
-                found_path = Some(path);
-                break;
-            }
-        }
+    // 3. Bundled inside a Proton build (the common case).
+    if let Some((path, version)) = detect_vkd3d_from_proton() {
+        // The split `vkd3d-proton/` runtime layout corresponds to modern
+        // vkd3d-proton builds that ship VK_EXT_descriptor_heap support.
+        let descriptor_heap_support = path.to_string_lossy().contains("vkd3d-proton");
+        return Some(Vkd3dProtonStatus {
+            installed: true,
+            version: Some(version),
+            path: Some(path),
+            descriptor_heap_support,
+        });
     }
-
-    // Try to detect via Proton (vkd3d-proton is bundled)
-    if found_path.is_none() {
-        if let Some((path, ver)) = detect_vkd3d_from_proton() {
-            found_path = Some(path);
-            version = Some(ver);
-        }
-    }
-
-    // Check if version supports descriptor_heap (PR #2805)
-    // This requires vkd3d-proton 2.14+ (when merged) or a patched build
-    let descriptor_heap_support = version
-        .as_ref()
-        .is_some_and(|v| version_supports_descriptor_heap(v));
 
     Some(Vkd3dProtonStatus {
-        installed: found_path.is_some(),
-        version,
-        path: found_path,
-        descriptor_heap_support,
+        installed: false,
+        version: None,
+        path: None,
+        descriptor_heap_support: false,
     })
 }
 
 /// Read vkd3d-proton version from installation
-fn read_vkd3d_version(path: &PathBuf) -> Option<String> {
+fn read_vkd3d_version(path: &Path) -> Option<String> {
     // Try version file
     let version_file = path.join("version");
     if let Ok(content) = std::fs::read_to_string(&version_file) {
@@ -195,10 +207,10 @@ fn read_vkd3d_version(path: &PathBuf) -> Option<String> {
     let setup_script = path.join("setup_vkd3d_proton.sh");
     if let Ok(content) = std::fs::read_to_string(&setup_script) {
         for line in content.lines() {
-            if line.contains("VKD3D_PROTON_VERSION=") {
-                if let Some(ver) = line.split('=').nth(1) {
-                    return Some(ver.trim_matches('"').to_string());
-                }
+            if line.contains("VKD3D_PROTON_VERSION=")
+                && let Some(ver) = line.split('=').nth(1)
+            {
+                return Some(ver.trim_matches('"').to_string());
             }
         }
     }
@@ -206,38 +218,86 @@ fn read_vkd3d_version(path: &PathBuf) -> Option<String> {
     None
 }
 
-/// Detect vkd3d-proton bundled with Proton
-fn detect_vkd3d_from_proton() -> Option<(PathBuf, String)> {
-    // Check Steam Proton installations
-    let home = std::env::var("HOME").ok()?;
-    let steam_path = PathBuf::from(&home).join(".local/share/Steam");
+/// Candidate Steam data roots, de-duplicated by canonical path.
+fn steam_roots() -> Vec<PathBuf> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let candidates = [
+        format!("{home}/.local/share/Steam"),
+        format!("{home}/.steam/steam"),
+        format!("{home}/.steam/root"),
+        format!("{home}/.var/app/com.valvesoftware.Steam/.local/share/Steam"),
+    ];
 
-    // Check Proton Experimental
-    let proton_exp = steam_path.join("steamapps/common/Proton - Experimental");
-    if proton_exp.exists() {
-        let vkd3d_path = proton_exp.join("files/lib64/vkd3d-proton");
-        if vkd3d_path.exists() {
-            // Try to get version from proton_version
-            let version_file = proton_exp.join("version");
-            if let Ok(content) = std::fs::read_to_string(&version_file) {
-                let version = content.lines().next().unwrap_or("unknown").to_string();
-                return Some((vkd3d_path, format!("bundled (Proton {})", version)));
-            }
-            return Some((vkd3d_path, "bundled (Proton Experimental)".to_string()));
+    let mut roots = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for candidate in candidates {
+        let path = PathBuf::from(&candidate);
+        if !path.exists() {
+            continue;
+        }
+        let canonical = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+        if seen.insert(canonical.clone()) {
+            roots.push(canonical);
         }
     }
+    roots
+}
 
-    // Check GE-Proton
-    let ge_proton_dir = steam_path.join("compatibilitytools.d");
-    if ge_proton_dir.exists() {
-        if let Ok(entries) = std::fs::read_dir(&ge_proton_dir) {
+/// Relative paths (within a Proton build's directory) where the vkd3d-proton
+/// d3d12 runtime DLL may live, newest layout first.
+const VKD3D_DLL_RELPATHS: &[&str] = &[
+    "files/lib/wine/vkd3d-proton/x86_64-windows/d3d12.dll",
+    "files/lib64/wine/vkd3d-proton/x86_64-windows/d3d12.dll",
+    "files/lib/wine/x86_64-windows/d3d12.dll",
+    "files/lib64/wine/x86_64-windows/d3d12.dll",
+];
+
+/// Find the vkd3d-proton runtime DLL inside a single Proton build directory.
+fn vkd3d_dll_in_proton(proton_dir: &Path) -> Option<PathBuf> {
+    VKD3D_DLL_RELPATHS
+        .iter()
+        .map(|rel| proton_dir.join(rel))
+        .find(|p| p.exists())
+}
+
+/// Read the human-readable Proton version label from a build directory.
+/// Proton `version` files look like: `1780064122 experimental-11.0-20260529`.
+fn read_proton_version(proton_dir: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(proton_dir.join("version")).ok()?;
+    let line = content.lines().next()?;
+    Some(line.split_whitespace().last().unwrap_or(line).to_string())
+}
+
+/// Detect vkd3d-proton bundled inside a Proton build.
+///
+/// Scans both Valve Proton installs (`steamapps/common/*roton*`) and custom
+/// builds in `compatibilitytools.d` (GE-Proton, proton-tkg, proton-cachyos, ...)
+/// across every Steam root.
+fn detect_vkd3d_from_proton() -> Option<(PathBuf, String)> {
+    for steam in steam_roots() {
+        // Valve Proton builds under steamapps/common.
+        if let Ok(entries) = std::fs::read_dir(steam.join("steamapps/common")) {
             for entry in entries.flatten() {
                 let name = entry.file_name().to_string_lossy().to_string();
-                if name.starts_with("GE-Proton") {
-                    let vkd3d_path = entry.path().join("files/lib64/vkd3d-proton");
-                    if vkd3d_path.exists() {
-                        return Some((vkd3d_path, format!("bundled ({})", name)));
-                    }
+                if !name.to_lowercase().contains("proton") {
+                    continue;
+                }
+                if let Some(dll) = vkd3d_dll_in_proton(&entry.path()) {
+                    let version = read_proton_version(&entry.path()).unwrap_or(name);
+                    return Some((dll, format!("bundled (Proton {})", version)));
+                }
+            }
+        }
+
+        // Custom Proton/Wine builds under compatibilitytools.d.
+        if let Ok(entries) = std::fs::read_dir(steam.join("compatibilitytools.d")) {
+            for entry in entries.flatten() {
+                if let Some(dll) = vkd3d_dll_in_proton(&entry.path()) {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    let version = read_proton_version(&entry.path())
+                        .map(|v| format!("bundled ({name} {v})"))
+                        .unwrap_or_else(|| format!("bundled ({name})"));
+                    return Some((dll, version));
                 }
             }
         }
@@ -305,9 +365,7 @@ fn detect_proton_nv() -> Option<ProtonNvStatus> {
 
 /// Detect external tools
 fn detect_tools() -> ToolsStatus {
-    let gamemode_running = gamemode::status()
-        .map(|s| s.running)
-        .unwrap_or(false);
+    let gamemode_running = gamemode::status().map(|s| s.running).unwrap_or(false);
 
     ToolsStatus {
         mangohud: mangohud::is_installed(),
@@ -328,34 +386,21 @@ fn evaluate_dx12_readiness(
 
     // Check for descriptor_heap (primary requirement)
     if !vk.descriptor_heap {
-        if vk.is_595_series {
-            return (
-                false,
-                format!(
-                    "Driver {} is 595 series but VK_EXT_descriptor_heap not available. Reinstall driver?",
-                    vk.driver_version
-                ),
-            );
-        } else if vk.is_beta {
-            return (
-                false,
-                format!(
-                    "Beta driver {} detected but VK_EXT_descriptor_heap not available. Update to 595.x+",
-                    vk.driver_version
-                ),
-            );
+        let hint = if vk.dx12_heap_branch {
+            "driver branch should expose it - try reinstalling or check the Vulkan ICD"
         } else {
-            return (
-                false,
-                format!(
-                    "Stable driver {} does not support VK_EXT_descriptor_heap. Update to 595.x beta or wait for stable release",
-                    vk.driver_version
-                ),
-            );
-        }
+            "requires NVIDIA driver branch 595 or newer"
+        };
+        return (
+            false,
+            format!(
+                "Driver {} does not expose VK_EXT_descriptor_heap ({})",
+                vk.driver_version, hint
+            ),
+        );
     }
 
-    // Check for extended_sparse_address_space (595 heap fix)
+    // Check for extended_sparse_address_space (DX12 heap fix)
     let has_heap_fix = vk.extended_sparse_address_space;
 
     // Check vkd3d-proton
@@ -430,7 +475,7 @@ pub fn handle_status(args: StatusArgs, _manager: &ConfigManager) -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&status)?);
         }
         OutputFormat::Yaml => {
-            println!("{}", serde_yaml::to_string(&status)?);
+            println!("{}", serde_norway::to_string(&status)?);
         }
         OutputFormat::Text => {
             print_status_text(&status, args.verbose);
@@ -451,8 +496,8 @@ fn print_status_text(status: &SystemStatus, verbose: bool) {
         println!("  GPU: {}", vk.gpu_name);
         print!("  Driver: NVIDIA {}", vk.driver_version);
         if vk.is_beta {
-            if vk.is_595_series {
-                println!(" (595 beta - DX12 heap fixes)");
+            if vk.dx12_heap_branch {
+                println!(" (beta - DX12 heap fixes)");
             } else {
                 println!(" (beta)");
             }
@@ -477,11 +522,7 @@ fn print_status_text(status: &SystemStatus, verbose: bool) {
 
         // Gaming/latency extensions
         println!("\nGaming Extensions:");
-        print_extension_status_with_note(
-            "VK_NV_low_latency2",
-            vk.low_latency2,
-            "Reflex 2.0",
-        );
+        print_extension_status_with_note("VK_NV_low_latency2", vk.low_latency2, "Reflex 2.0");
         print_extension_status_with_note(
             "VK_EXT_present_timing",
             vk.present_timing,
@@ -499,10 +540,8 @@ fn print_status_text(status: &SystemStatus, verbose: bool) {
                 "  Version: {}",
                 vkd3d.version.as_deref().unwrap_or("unknown")
             );
-            if verbose {
-                if let Some(ref path) = vkd3d.path {
-                    println!("  Path: {}", path.display());
-                }
+            if verbose && let Some(ref path) = vkd3d.path {
+                println!("  Path: {}", path.display());
             }
             print!(
                 "  descriptor_heap support: {}",
@@ -524,14 +563,9 @@ fn print_status_text(status: &SystemStatus, verbose: bool) {
     println!("\nProton-NV:");
     if let Some(ref pnv) = status.proton_nv {
         if pnv.installed {
-            println!(
-                "  Version: {}",
-                pnv.version.as_deref().unwrap_or("unknown")
-            );
-            if verbose {
-                if let Some(ref path) = pnv.path {
-                    println!("  Path: {}", path.display());
-                }
+            println!("  Version: {}", pnv.version.as_deref().unwrap_or("unknown"));
+            if verbose && let Some(ref path) = pnv.path {
+                println!("  Path: {}", path.display());
             }
         } else {
             println!("  Not installed");
@@ -564,6 +598,41 @@ fn print_status_text(status: &SystemStatus, verbose: bool) {
         println!();
     }
 
+    // Noise suppression (ghostwave) section
+    println!("\nNoise Suppression (ghostwave):");
+    if status.audio.available {
+        match status.audio.processing_mode {
+            Some(ref mode) => println!("  Available: yes ({})", mode),
+            None => println!("  Available: yes"),
+        }
+        if status.audio.rtx_acceleration {
+            println!("  RTX acceleration: yes");
+        }
+    } else {
+        println!("  Not built (rebuild with --features noise-suppression)");
+    }
+
+    // Capture / encode (ghoststream) section
+    println!("\nCapture/Encode (ghoststream):");
+    if status.encoder.available {
+        println!(
+            "  NVENC: {}",
+            if status.encoder.nvenc {
+                "available"
+            } else {
+                "not available"
+            }
+        );
+        if let Some(ref gpu) = status.encoder.gpu_name {
+            println!("  Encoder GPU: {}", gpu);
+        }
+        if !status.encoder.codecs.is_empty() {
+            println!("  NVENC codecs: {}", status.encoder.codecs.join(", "));
+        }
+    } else {
+        println!("  Not built (rebuild with --features streaming)");
+    }
+
     // DX12 readiness summary
     println!("\n{}", "=".repeat(50));
     println!("DX12 Optimization Status:");
@@ -581,7 +650,11 @@ fn print_status_text(status: &SystemStatus, verbose: bool) {
 }
 
 fn print_extension_status(name: &str, supported: bool, important: bool) {
-    let status = if supported { "supported" } else { "not available" };
+    let status = if supported {
+        "supported"
+    } else {
+        "not available"
+    };
     let marker = if important && supported {
         " [DX12 FIX]"
     } else if important && !supported {
@@ -603,24 +676,28 @@ fn print_extension_status_with_note(name: &str, supported: bool, note: &str) {
 fn print_recommendations(status: &SystemStatus) {
     if let Some(ref vk) = status.vulkan {
         if !vk.descriptor_heap {
-            if vk.is_595_series {
-                println!("  - Driver 595 detected but descriptor_heap missing - try reinstalling");
+            if vk.dx12_heap_branch {
+                println!(
+                    "  - Driver branch {} should expose VK_EXT_descriptor_heap - try reinstalling",
+                    vk.driver_branch
+                );
                 println!("  - Verify Vulkan ICD is properly configured");
-            } else if vk.is_beta {
-                println!("  - Update to 595.x beta driver for full DX12 heap fixes");
-                println!("  - See: https://developer.nvidia.com/vulkan-driver");
             } else {
-                println!("  - Install 595.x beta driver for DX12 optimizations");
-                println!("  - Or wait for 600.x stable release");
+                println!(
+                    "  - Update to NVIDIA driver branch 595+ for DX12 descriptor_heap optimizations"
+                );
+                println!("  - See: https://developer.nvidia.com/vulkan-driver");
             }
         } else if !vk.extended_sparse_address_space {
-            println!("  - descriptor_heap available but missing heap fix extension");
-            println!("  - Update to 595.45+ for VK_NV_extended_sparse_address_space");
+            println!("  - descriptor_heap available but missing the heap-fix extension");
+            println!(
+                "  - Update to the latest driver in your branch for VK_NV_extended_sparse_address_space"
+            );
         }
 
         // Reflex 2.0 recommendation
         if !vk.low_latency2 && vk.driver_branch >= 550 {
-            println!("  - Update to 595.x for Reflex 2.0 (VK_NV_low_latency2)");
+            println!("  - Update to driver branch 595+ for Reflex 2.0 (VK_NV_low_latency2)");
         }
     } else {
         println!("  - Ensure NVIDIA GPU is properly detected");
@@ -644,31 +721,30 @@ fn print_recommendations(status: &SystemStatus) {
 pub fn check_driver_update() -> Option<String> {
     // Check if a newer driver is available
     if let Ok(caps) = VulkanCapabilities::detect() {
-        // Check for 595 with full features
-        if caps.driver_branch >= 595 {
-            let features = caps.driver_595_features();
+        // DX12-capable branch (595+): only flag if some features are missing.
+        if caps.has_dx12_heap_branch() {
+            let features = caps.dx12_features();
             if !features.is_fully_supported() {
                 return Some(format!(
-                    "Driver {} is 595 series but missing some features. Update to latest 595.x",
+                    "Driver {} is on a DX12-capable branch but missing some features. Update to the latest driver in your branch",
                     caps.driver_version
                 ));
             }
-            // 595 is current best, no update needed
             return None;
         }
 
-        // Recommend 595 for older drivers
-        if caps.driver_branch < 595 && !caps.descriptor_heap {
+        // Older branch without descriptor_heap.
+        if !caps.descriptor_heap {
             return Some(format!(
-                "Driver {} is outdated. NVIDIA 595.x+ recommended for DX12 optimizations (descriptor_heap + heap fix)",
+                "Driver {} is outdated. NVIDIA branch 595+ recommended for DX12 optimizations (descriptor_heap + heap fix)",
                 caps.driver_version
             ));
         }
 
-        // Has descriptor_heap but not 595 - recommend update for heap fix
+        // Has descriptor_heap but missing the heap fix.
         if caps.descriptor_heap && !caps.extended_sparse_address_space {
             return Some(format!(
-                "Driver {} has descriptor_heap but missing heap fix. Update to 595.x for VK_NV_extended_sparse_address_space",
+                "Driver {} has descriptor_heap but missing the heap fix. Update to branch 595+ for VK_NV_extended_sparse_address_space",
                 caps.driver_version
             ));
         }
@@ -681,11 +757,11 @@ pub fn check_driver_update() -> Option<String> {
 /// 0 = No NVIDIA or very old driver
 /// 1 = Has descriptor_heap (580.94+)
 /// 2 = Has heap fix (595+)
-/// 3 = Full 595 features (descriptor_heap + heap fix + Reflex 2.0)
+/// 3 = Full DX12 heap-fix set (descriptor_heap + heap fix + Reflex 2.0)
 #[allow(dead_code)] // Library API
 pub fn driver_readiness_level() -> u8 {
     if let Ok(caps) = VulkanCapabilities::detect() {
-        let features = caps.driver_595_features();
+        let features = caps.dx12_features();
 
         if features.is_fully_supported() {
             return 3;

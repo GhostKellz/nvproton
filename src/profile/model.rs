@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use serde_yaml::{Mapping, Value};
+use serde_norway::{Mapping, Value};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProfileDocument {

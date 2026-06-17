@@ -42,7 +42,7 @@ impl GameDatabase {
         let contents = fs::read_to_string(&db_path)
             .with_context(|| format!("failed to read game database at {:?}", db_path))?;
         let db: GameDatabase =
-            serde_yaml::from_str(&contents).context("failed to parse game database YAML")?;
+            serde_norway::from_str(&contents).context("failed to parse game database YAML")?;
         Ok(db)
     }
 
@@ -51,7 +51,7 @@ impl GameDatabase {
         fs::create_dir_all(&paths.games_dir).with_context(|| {
             format!("failed to create games directory at {:?}", paths.games_dir)
         })?;
-        let encoded = serde_yaml::to_string(self).context("failed to serialize game database")?;
+        let encoded = serde_norway::to_string(self).context("failed to serialize game database")?;
         fs::write(&db_path, encoded)
             .with_context(|| format!("failed to write game database at {:?}", db_path))?;
         Ok(())

@@ -6,7 +6,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 
 /// Game-to-profile binding record
 #[derive(Debug, Clone)]
@@ -75,7 +75,12 @@ impl ProfilePersistence {
                      updated_at = strftime('%s', 'now')",
                 params![game_id, profile_name],
             )
-            .with_context(|| format!("failed to bind game '{}' to profile '{}'", game_id, profile_name))?;
+            .with_context(|| {
+                format!(
+                    "failed to bind game '{}' to profile '{}'",
+                    game_id, profile_name
+                )
+            })?;
         Ok(())
     }
 
@@ -138,7 +143,9 @@ impl ProfilePersistence {
     pub fn games_with_profile(&self, profile_name: &str) -> Result<Vec<String>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT game_id FROM profile_bindings WHERE profile_name = ?1 ORDER BY game_id")
+            .prepare(
+                "SELECT game_id FROM profile_bindings WHERE profile_name = ?1 ORDER BY game_id",
+            )
             .context("failed to prepare games query")?;
 
         let games = stmt
@@ -193,7 +200,9 @@ impl ProfilePersistence {
     pub fn count(&self) -> Result<usize> {
         let count: i64 = self
             .conn
-            .query_row("SELECT COUNT(*) FROM profile_bindings", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM profile_bindings", [], |row| {
+                row.get(0)
+            })
             .context("failed to count bindings")?;
         Ok(count as usize)
     }

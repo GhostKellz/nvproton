@@ -3,7 +3,6 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
 use crate::cli::ConfigCommand;
@@ -87,11 +86,11 @@ pub struct Vkd3dConfig {
     #[serde(default = "default_true")]
     pub warn_beta_driver: bool,
 
-    /// Auto-enable descriptor_heap on 595+ drivers
-    #[serde(default = "default_true")]
-    pub auto_enable_595: bool,
+    /// Auto-enable descriptor_heap on DX12-capable driver branches (595+)
+    #[serde(default = "default_true", alias = "auto_enable_595")]
+    pub auto_enable_dx12_heap: bool,
 
-    /// Prefer extended_sparse_address_space when available (595+ heap fix)
+    /// Prefer extended_sparse_address_space when available (DX12 heap fix)
     #[serde(default = "default_true")]
     pub use_heap_fix: bool,
 }
@@ -103,7 +102,7 @@ impl Default for Vkd3dConfig {
             config_flags: Vec::new(),
             feature_level: "12_2".to_string(),
             warn_beta_driver: true,
-            auto_enable_595: true,
+            auto_enable_dx12_heap: true,
             use_heap_fix: true,
         }
     }
@@ -121,10 +120,8 @@ impl Vkd3dConfig {
                     flags.push("descriptor_heap".to_string());
                 }
             }
-            "auto" => {
-                if has_descriptor_heap && !flags.contains(&"descriptor_heap".to_string()) {
-                    flags.push("descriptor_heap".to_string());
-                }
+            "auto" if has_descriptor_heap && !flags.contains(&"descriptor_heap".to_string()) => {
+                flags.push("descriptor_heap".to_string());
             }
             _ => {}
         }
@@ -168,9 +165,9 @@ pub struct ConfigManager {
 
 impl ConfigManager {
     pub fn new() -> Result<Self> {
-        let project_dirs = ProjectDirs::from("com", "ghostkellz", "nvproton")
-            .context("unable to resolve project directories")?;
-        let base_config = project_dirs.config_dir().to_path_buf();
+        let base_config = dirs::config_dir()
+            .context("unable to resolve user config directory")?
+            .join("nvproton");
         let paths = ConfigPaths {
             user_config_dir: base_config.clone(),
             games_dir: base_config.join("games"),
@@ -189,7 +186,7 @@ impl ConfigManager {
             {
                 toml::from_str(&contents).context("failed to parse TOML config")?
             } else {
-                serde_yaml::from_str(&contents).context("failed to parse YAML config")?
+                serde_norway::from_str(&contents).context("failed to parse YAML config")?
             };
             Ok(config)
         } else {
@@ -205,7 +202,7 @@ impl ConfigManager {
         let encoded = if path.extension().and_then(|ext| ext.to_str()) == Some("toml") {
             toml::to_string_pretty(config).context("failed to serialize config to TOML")?
         } else {
-            serde_yaml::to_string(config).context("failed to serialize config to YAML")?
+            serde_norway::to_string(config).context("failed to serialize config to YAML")?
         };
         let mut file = fs::File::create(&path)
             .with_context(|| format!("failed to open config file at {:?}", path))?;
@@ -238,7 +235,8 @@ pub fn handle_config(
         ConfigCommand::Show => {
             println!(
                 "{}",
-                serde_yaml::to_string(config).context("failed to serialize config for display")?
+                serde_norway::to_string(config)
+                    .context("failed to serialize config for display")?
             );
         }
         ConfigCommand::Paths => {

@@ -3,7 +3,7 @@ mod model;
 mod persistence;
 
 use anyhow::{Context, Result};
-use serde_yaml::{Mapping, Value};
+use serde_norway::{Mapping, Value};
 use std::fs;
 
 use crate::cli::{
@@ -31,7 +31,7 @@ pub fn handle_profile(
         }
         ProfileCommand::Show(ProfileNameArgs { name }) => {
             let resolved = profile_manager.resolve(&name)?;
-            println!("{}", serde_yaml::to_string(&resolved.settings)?)
+            println!("{}", serde_norway::to_string(&resolved.settings)?)
         }
         ProfileCommand::Create(ProfileCreateArgs { name, base, values }) => {
             if profile_manager.exists(&name) {
@@ -52,7 +52,7 @@ pub fn handle_profile(
         ProfileCommand::Import(ProfileImportArgs { path, name }) => {
             let contents = fs::read_to_string(&path)
                 .with_context(|| format!("failed to read profile from {:?}", path))?;
-            let mut document: ProfileDocument = serde_yaml::from_str(&contents)
+            let mut document: ProfileDocument = serde_norway::from_str(&contents)
                 .or_else(|_| serde_json::from_str(&contents))
                 .context("failed to parse profile document")?;
             if let Some(name) = name {
@@ -64,7 +64,7 @@ pub fn handle_profile(
         ProfileCommand::Export(ProfileExportArgs { name, format, path }) => {
             let document = profile_manager.load(&name)?;
             let encoded = match format {
-                OutputFormat::Text | OutputFormat::Yaml => serde_yaml::to_string(&document)?,
+                OutputFormat::Text | OutputFormat::Yaml => serde_norway::to_string(&document)?,
                 OutputFormat::Json => serde_json::to_string_pretty(&document)?,
             };
             if let Some(path) = path {
@@ -120,7 +120,7 @@ mod tests {
         .expect("apply sets");
         let resolved = document
             .settings
-            .get(&Value::String("graphics".into()))
+            .get(Value::String("graphics".into()))
             .unwrap();
         let graphics = resolved.as_mapping().unwrap();
         assert_eq!(

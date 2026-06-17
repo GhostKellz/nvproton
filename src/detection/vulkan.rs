@@ -15,8 +15,21 @@ use std::ffi::CStr;
 /// NVIDIA vendor ID
 const NVIDIA_VENDOR_ID: u32 = 0x10DE;
 
+/// First NVIDIA driver branch shipping the DX12 heap-fix feature set
+/// (VK_EXT_descriptor_heap, VK_NV_extended_sparse_address_space, etc.).
+/// Present in 595 and all later branches (600, 610, ...).
+pub const DX12_HEAP_FIX_MIN_BRANCH: u32 = 595;
+
+/// Known NVIDIA beta driver branch ranges `[start, end)`.
+/// Branches not listed here are treated as stable/production
+/// (e.g. 590, 600, 610 are production lines).
+const BETA_BRANCH_RANGES: &[std::ops::Range<u32>] = &[
+    580..590, // 580.x Vulkan beta series (first VK_EXT_descriptor_heap)
+    595..600, // 595.x Vulkan beta series (DX12 heap fix)
+];
+
 /// Vulkan capabilities relevant for NVIDIA + vkd3d-proton
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct VulkanCapabilities {
     /// Driver version string (e.g., "595.45.04")
     pub driver_version: String,
@@ -40,23 +53,6 @@ pub struct VulkanCapabilities {
     pub is_nvidia: bool,
 }
 
-impl Default for VulkanCapabilities {
-    fn default() -> Self {
-        Self {
-            driver_version: String::new(),
-            driver_branch: 0,
-            descriptor_heap: false,
-            descriptor_buffer: false,
-            raw_access_chains: false,
-            low_latency2: false,
-            extended_sparse_address_space: false,
-            present_timing: false,
-            gpu_name: String::new(),
-            is_nvidia: false,
-        }
-    }
-}
-
 impl VulkanCapabilities {
     /// Detect Vulkan capabilities for the primary NVIDIA GPU
     pub fn detect() -> Result<Self> {
@@ -64,8 +60,7 @@ impl VulkanCapabilities {
         let entry = unsafe { ash::Entry::load() }.context("Failed to load Vulkan library")?;
 
         // Create minimal instance without extensions
-        let app_info = vk::ApplicationInfo::default()
-            .api_version(vk::make_api_version(0, 1, 3, 0));
+        let app_info = vk::ApplicationInfo::default().api_version(vk::make_api_version(0, 1, 3, 0));
 
         let create_info = vk::InstanceCreateInfo::default().application_info(&app_info);
 
@@ -104,14 +99,12 @@ impl VulkanCapabilities {
                 capabilities.driver_branch = major;
 
                 // Enumerate device extensions
-                let extensions = unsafe {
-                    instance.enumerate_device_extension_properties(device)
-                }
-                .context("Failed to enumerate device extensions")?;
+                let extensions = unsafe { instance.enumerate_device_extension_properties(device) }
+                    .context("Failed to enumerate device extensions")?;
 
                 for ext in extensions {
-                    let name = unsafe { CStr::from_ptr(ext.extension_name.as_ptr()) }
-                        .to_string_lossy();
+                    let name =
+                        unsafe { CStr::from_ptr(ext.extension_name.as_ptr()) }.to_string_lossy();
 
                     match name.as_ref() {
                         "VK_EXT_descriptor_heap" => capabilities.descriptor_heap = true,
@@ -156,32 +149,20 @@ impl VulkanCapabilities {
         self.extended_sparse_address_space
     }
 
-    /// Check if this is a beta driver
-    /// Beta branches: 580.x (first descriptor_heap), 595.x (heap fix)
-    /// Stable branches: 5x0.x where x is even (e.g., 560, 570, 590)
+    /// Check if this is a beta driver branch.
+    /// Driven by `BETA_BRANCH_RANGES`; anything not listed is treated as
+    /// stable/production (e.g. 590, 600, 610).
     pub fn is_beta_driver(&self) -> bool {
-        // NVIDIA beta driver versioning:
-        // - Odd minor version in branch typically indicates beta
-        // - 580.x, 585.x, 595.x are beta branches
-        // - 560.x, 570.x, 590.x are stable branches
-        let branch = self.driver_branch;
-
-        // Known beta branches
-        if branch >= 580 && branch < 590 {
-            return true; // 580.x beta series
-        }
-        if branch >= 595 && branch < 600 {
-            return true; // 595.x beta series (current)
-        }
-
-        // Future: odd tens digit in 5xx usually means beta
-        // e.g., 585, 595 = beta; 580, 590 = could be stable/beta transition
-        false
+        BETA_BRANCH_RANGES
+            .iter()
+            .any(|range| range.contains(&self.driver_branch))
     }
 
-    /// Check if this is the 595 driver series with DX12 fixes
-    pub fn is_595_series(&self) -> bool {
-        self.driver_branch >= 595 && self.driver_branch < 600
+    /// Whether the driver branch is new enough to ship the DX12 heap-fix
+    /// feature set (595+). Extension probing is authoritative; this is the
+    /// branch-based floor used for messaging and auto-enable fallbacks.
+    pub fn has_dx12_heap_branch(&self) -> bool {
+        self.driver_branch >= DX12_HEAP_FIX_MIN_BRANCH
     }
 
     /// Check if driver is expected to have descriptor_heap support
@@ -200,9 +181,9 @@ impl VulkanCapabilities {
         self.driver_branch >= 590
     }
 
-    /// Get a summary of driver capabilities for 595 features
-    pub fn driver_595_features(&self) -> Driver595Features {
-        Driver595Features {
+    /// Get a summary of the DX12 heap-fix driver features (595+).
+    pub fn dx12_features(&self) -> Dx12DriverFeatures {
+        Dx12DriverFeatures {
             descriptor_heap: self.descriptor_heap,
             extended_sparse: self.extended_sparse_address_space,
             low_latency2: self.low_latency2,
@@ -243,10 +224,10 @@ impl VulkanCapabilities {
     }
 }
 
-/// Summary of 595 driver features
+/// Summary of the DX12 heap-fix driver feature set (595+)
 #[derive(Debug, Clone)]
 #[allow(dead_code)] // Library API - fields used for feature tracking
-pub struct Driver595Features {
+pub struct Dx12DriverFeatures {
     pub descriptor_heap: bool,
     pub extended_sparse: bool,
     pub low_latency2: bool,
@@ -254,13 +235,13 @@ pub struct Driver595Features {
     pub raw_access_chains: bool,
 }
 
-impl Driver595Features {
-    /// Check if all major 595 features are available
+impl Dx12DriverFeatures {
+    /// Check if all major DX12 heap-fix features are available
     pub fn is_fully_supported(&self) -> bool {
         self.descriptor_heap && self.extended_sparse && self.low_latency2
     }
 
-    /// Count of supported 595 features
+    /// Count of supported DX12 heap-fix features
     #[allow(dead_code)] // Library API
     pub fn feature_count(&self) -> usize {
         [
@@ -283,8 +264,8 @@ impl std::fmt::Display for VulkanCapabilities {
         writeln!(f, "  GPU: {}", self.gpu_name)?;
         write!(f, "  Driver: NVIDIA {}", self.driver_version)?;
         if self.is_beta_driver() {
-            if self.is_595_series() {
-                writeln!(f, " (595 beta - DX12 fixes)")?;
+            if self.has_dx12_heap_branch() {
+                writeln!(f, " (beta - DX12 heap fixes)")?;
             } else {
                 writeln!(f, " (beta)")?;
             }
@@ -360,10 +341,12 @@ mod tests {
 
     #[test]
     fn test_version_comparison() {
-        let mut caps = VulkanCapabilities::default();
+        let mut caps = VulkanCapabilities {
+            driver_version: "580.94.16".into(),
+            ..Default::default()
+        };
 
         // Test exact version
-        caps.driver_version = "580.94.16".into();
         assert!(caps.parse_version_ge(580, 94, 16));
         assert!(!caps.parse_version_ge(580, 94, 17));
 
@@ -386,10 +369,12 @@ mod tests {
 
     #[test]
     fn test_beta_driver_detection() {
-        let mut caps = VulkanCapabilities::default();
+        let mut caps = VulkanCapabilities {
+            driver_branch: 580,
+            ..Default::default()
+        };
 
         // 580.x beta series
-        caps.driver_branch = 580;
         assert!(caps.is_beta_driver());
 
         caps.driver_branch = 585;
@@ -399,40 +384,47 @@ mod tests {
         caps.driver_branch = 590;
         assert!(!caps.is_beta_driver());
 
-        // 595.x beta series (current)
+        // 595.x beta series (first DX12 heap-fix branch)
         caps.driver_branch = 595;
         assert!(caps.is_beta_driver());
-        assert!(caps.is_595_series());
+        assert!(caps.has_dx12_heap_branch());
 
         caps.driver_branch = 599;
         assert!(caps.is_beta_driver());
-        assert!(caps.is_595_series());
+        assert!(caps.has_dx12_heap_branch());
 
-        // Pre-580 should not be beta
+        // Pre-580 should not be beta and lacks the DX12 heap-fix set
         caps.driver_branch = 575;
         assert!(!caps.is_beta_driver());
+        assert!(!caps.has_dx12_heap_branch());
 
-        // 600+ future stable
+        // 600/610 are stable production branches that still ship DX12 heap fixes
         caps.driver_branch = 600;
         assert!(!caps.is_beta_driver());
-        assert!(!caps.is_595_series());
+        assert!(caps.has_dx12_heap_branch());
+
+        caps.driver_branch = 610;
+        assert!(!caps.is_beta_driver());
+        assert!(caps.has_dx12_heap_branch());
     }
 
     #[test]
-    fn test_595_features() {
-        let mut caps = VulkanCapabilities::default();
-        caps.descriptor_heap = true;
-        caps.extended_sparse_address_space = true;
-        caps.low_latency2 = true;
-        caps.present_timing = true;
-        caps.raw_access_chains = true;
+    fn test_dx12_features() {
+        let mut caps = VulkanCapabilities {
+            descriptor_heap: true,
+            extended_sparse_address_space: true,
+            low_latency2: true,
+            present_timing: true,
+            raw_access_chains: true,
+            ..Default::default()
+        };
 
-        let features = caps.driver_595_features();
+        let features = caps.dx12_features();
         assert!(features.is_fully_supported());
         assert_eq!(features.feature_count(), 5);
 
         caps.low_latency2 = false;
-        let features = caps.driver_595_features();
+        let features = caps.dx12_features();
         assert!(!features.is_fully_supported());
         assert_eq!(features.feature_count(), 4);
     }

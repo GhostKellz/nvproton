@@ -48,14 +48,20 @@ static DX12_GAMES: Lazy<HashMap<&'static str, GameInfo>> = Lazy::new(|| {
     // AAA titles with DX12
     m.insert("1245620", GameInfo::dx12("Elden Ring"));
     m.insert("1938090", GameInfo::dx12("Call of Duty: Modern Warfare II"));
-    m.insert("2519060", GameInfo::dx12("Call of Duty: Modern Warfare III"));
+    m.insert(
+        "2519060",
+        GameInfo::dx12("Call of Duty: Modern Warfare III"),
+    );
     m.insert("1172470", GameInfo::dx12("Apex Legends")); // DX11/DX12
     m.insert("271590", GameInfo::dx12("Grand Theft Auto V")); // DX11/DX12
     m.insert("1174180", GameInfo::dx12("Red Dead Redemption 2"));
     m.insert("1151640", GameInfo::dx12("Horizon Zero Dawn"));
     m.insert("1593500", GameInfo::dx12("God of War"));
     m.insert("1817070", GameInfo::dx12("Marvel's Spider-Man Remastered"));
-    m.insert("1817190", GameInfo::dx12("Marvel's Spider-Man: Miles Morales"));
+    m.insert(
+        "1817190",
+        GameInfo::dx12("Marvel's Spider-Man: Miles Morales"),
+    );
     m.insert("2138710", GameInfo::dx12("God of War Ragnarok"));
     m.insert("1888160", GameInfo::dx12("ARMORED CORE VI"));
     m.insert("814380", GameInfo::dx12("Sekiro: Shadows Die Twice"));
@@ -66,8 +72,14 @@ static DX12_GAMES: Lazy<HashMap<&'static str, GameInfo>> = Lazy::new(|| {
     m.insert("292030", GameInfo::dx12("The Witcher 3: Wild Hunt"));
     m.insert("1086940", GameInfo::vulkan("Baldur's Gate 3")); // Vulkan native
     m.insert("1449560", GameInfo::dx12("Halo Infinite"));
-    m.insert("1063730", GameInfo::dx12("Halo: The Master Chief Collection"));
-    m.insert("1240440", GameInfo::dx12("Halo: Combat Evolved Anniversary")); // MCC
+    m.insert(
+        "1063730",
+        GameInfo::dx12("Halo: The Master Chief Collection"),
+    );
+    m.insert(
+        "1240440",
+        GameInfo::dx12("Halo: Combat Evolved Anniversary"),
+    ); // MCC
 
     // Microsoft titles (DX12 native)
     m.insert("1293830", GameInfo::dx12("Forza Horizon 4"));
@@ -75,7 +87,10 @@ static DX12_GAMES: Lazy<HashMap<&'static str, GameInfo>> = Lazy::new(|| {
     m.insert("1262540", GameInfo::dx12("Forza Motorsport"));
     m.insert("871720", GameInfo::dx12("Gears 5"));
     m.insert("1328670", GameInfo::dx12("Microsoft Flight Simulator"));
-    m.insert("459820", GameInfo::dx12("Age of Empires II: Definitive Edition"));
+    m.insert(
+        "459820",
+        GameInfo::dx12("Age of Empires II: Definitive Edition"),
+    );
     m.insert("933110", GameInfo::dx12("Age of Empires IV"));
     m.insert("1817480", GameInfo::dx12("Age of Mythology: Retold"));
     m.insert("1240440", GameInfo::dx12("Starfield"));
@@ -115,7 +130,10 @@ static DX12_GAMES: Lazy<HashMap<&'static str, GameInfo>> = Lazy::new(|| {
     m.insert("292120", GameInfo::dx12("FINAL FANTASY XV"));
     m.insert("1382330", GameInfo::dx12("FINAL FANTASY VII REMAKE"));
     m.insert("1096410", GameInfo::dx12("FINAL FANTASY XVI")); // Demo only on PC
-    m.insert("1286680", GameInfo::dx12("CRISIS CORE –FINAL FANTASY VII– REUNION"));
+    m.insert(
+        "1286680",
+        GameInfo::dx12("CRISIS CORE –FINAL FANTASY VII– REUNION"),
+    );
     m.insert("39210", GameInfo::dx12("FINAL FANTASY XIV Online"));
     m.insert("1113000", GameInfo::dx12("Persona 3 Reload"));
     m.insert("1382330", GameInfo::dx12("Persona 4 Golden")); // DX11
@@ -130,7 +148,10 @@ static DX12_GAMES: Lazy<HashMap<&'static str, GameInfo>> = Lazy::new(|| {
 
     // Unreal Engine 5 games (DX12 by default)
     m.insert("2215430", GameInfo::dx12("The Finals"));
-    m.insert("1966720", GameInfo::dx12("Warhammer 40,000: Space Marine 2"));
+    m.insert(
+        "1966720",
+        GameInfo::dx12("Warhammer 40,000: Space Marine 2"),
+    );
     m.insert("2139460", GameInfo::dx12("Once Human"));
     m.insert("2677660", GameInfo::dx12("Throne and Liberty"));
     m.insert("2358720", GameInfo::dx12("Black Myth: Wukong"));
